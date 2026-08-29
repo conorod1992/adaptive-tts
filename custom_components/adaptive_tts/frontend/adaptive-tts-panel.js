@@ -14,8 +14,10 @@ class AdaptiveTtsPanel extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; padding: 24px; color: var(--primary-text-color); }
-        ha-card { max-width: 880px; margin: 0 auto; padding: 24px; }
+        .page { max-width: 880px; margin: 0 auto; display: grid; gap: 20px; }
+        ha-card { padding: 24px; }
         h1 { margin: 0 0 8px; font-size: 24px; font-weight: 500; }
+        h2 { margin: 0 0 8px; font-size: 20px; font-weight: 500; }
         .intro { color: var(--secondary-text-color); margin: 0 0 24px; }
         .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
         label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--secondary-text-color); }
@@ -26,13 +28,18 @@ class AdaptiveTtsPanel extends HTMLElement {
         }
         textarea { min-height: 120px; resize: vertical; }
         .full { grid-column: 1 / -1; }
-        .actions { margin-top: 18px; display: flex; align-items: center; gap: 16px; }
+        .actions { margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         button {
           border: 0; border-radius: 4px; padding: 10px 18px; cursor: pointer;
           color: var(--text-primary-color); background: var(--primary-color); font: inherit;
         }
+        button.secondary {
+          color: var(--primary-text-color); background: transparent;
+          border: 1px solid var(--divider-color);
+        }
         button[disabled] { opacity: .55; cursor: default; }
-        #error { color: var(--error-color); margin-top: 16px; white-space: pre-wrap; }
+        .error { color: var(--error-color); margin-top: 16px; white-space: pre-wrap; }
+        .success { color: var(--success-color, var(--primary-color)); margin-top: 16px; white-space: pre-wrap; }
         #result { display: none; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--divider-color); }
         audio { width: 100%; margin: 12px 0 16px; }
         dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; }
@@ -40,47 +47,89 @@ class AdaptiveTtsPanel extends HTMLElement {
         dd { margin: 0; overflow-wrap: anywhere; }
         code { font-family: var(--code-font-family, monospace); }
         .hint { color: var(--secondary-text-color); font-size: 13px; }
-        @media (max-width: 700px) { :host { padding: 12px; } ha-card { padding: 18px; } .grid { grid-template-columns: 1fr; } }
+        @media (max-width: 700px) {
+          :host { padding: 12px; }
+          ha-card { padding: 18px; }
+          .grid { grid-template-columns: 1fr; }
+        }
       </style>
-      <ha-card>
-        <h1>TTS Test</h1>
-        <p class="intro">Compare a source TTS entity with its Adaptive TTS wrapper without changing an Assist pipeline.</p>
-        <div class="grid">
-          <label>Assist pipeline
-            <select id="pipeline"><option value="">Direct TTS selection</option></select>
-          </label>
-          <label>TTS entity
-            <select id="engine"></select>
-          </label>
-          <label>Language
-            <select id="language"></select>
-          </label>
-          <label id="voice-label">Voice
-            <select id="voice"></select>
-          </label>
-          <div id="options" class="full grid"></div>
-          <label class="full">Test text
-            <textarea id="message">This is an Adaptive TTS test.</textarea>
-          </label>
-        </div>
-        <div class="actions">
-          <button id="generate">Generate</button>
-          <span class="hint">Preview audio is temporary and kept in Home Assistant's bounded in-memory TTS cache.</span>
-        </div>
-        <div id="error" role="alert"></div>
-        <section id="result">
-          <strong>Generated preview</strong>
-          <audio id="audio" controls></audio>
-          <dl>
-            <dt>Requested entity</dt><dd><code id="used-engine"></code></dd>
-            <dt>Underlying entity</dt><dd><code id="used-underlying"></code></dd>
-            <dt>Language</dt><dd><code id="used-language"></code></dd>
-            <dt>Options</dt><dd><code id="used-options"></code></dd>
-            <dt>Quiet mode active</dt><dd id="used-quiet"></dd>
-          </dl>
-        </section>
-      </ha-card>`;
+      <div class="page">
+        <ha-card>
+          <h1>Adaptive TTS</h1>
+          <p class="intro">Control temporary or persistent voice overrides, or test TTS output without changing an Assist pipeline.</p>
 
+          <h2>Voice override</h2>
+          <p class="intro">Choose an Adaptive TTS entity, then select the language and one of the voices exposed by its wrapped provider.</p>
+          <div class="grid">
+            <label>Adaptive TTS entity
+              <select id="override-engine"></select>
+            </label>
+            <label>Duration
+              <select id="override-duration">
+                <option value="next_request">Next TTS request</option>
+                <option value="until_changed">Until changed again</option>
+              </select>
+            </label>
+            <label>Language
+              <select id="override-language"></select>
+            </label>
+            <label>Voice
+              <select id="override-voice"></select>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="set-override">Set voice override</button>
+            <button id="clear-override" class="secondary">Clear override</button>
+            <span class="hint">Persistent overrides survive Home Assistant restarts. Next-request overrides are consumed by the next synthesis request.</span>
+          </div>
+          <div id="override-error" class="error" role="alert"></div>
+          <div id="override-success" class="success" role="status"></div>
+        </ha-card>
+
+        <ha-card>
+          <h2>TTS Test</h2>
+          <p class="intro">Compare a source TTS entity with its Adaptive TTS wrapper without changing an Assist pipeline.</p>
+          <div class="grid">
+            <label>Assist pipeline
+              <select id="pipeline"><option value="">Direct TTS selection</option></select>
+            </label>
+            <label>TTS entity
+              <select id="engine"></select>
+            </label>
+            <label>Language
+              <select id="language"></select>
+            </label>
+            <label id="voice-label">Voice
+              <select id="voice"></select>
+            </label>
+            <div id="options" class="full grid"></div>
+            <label class="full">Test text
+              <textarea id="message">This is an Adaptive TTS test.</textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button id="generate">Generate</button>
+            <span class="hint">Preview audio is temporary and kept in Home Assistant's bounded in-memory TTS cache.</span>
+          </div>
+          <div id="error" class="error" role="alert"></div>
+          <section id="result">
+            <strong>Generated preview</strong>
+            <audio id="audio" controls></audio>
+            <dl>
+              <dt>Requested entity</dt><dd><code id="used-engine"></code></dd>
+              <dt>Underlying entity</dt><dd><code id="used-underlying"></code></dd>
+              <dt>Language</dt><dd><code id="used-language"></code></dd>
+              <dt>Options</dt><dd><code id="used-options"></code></dd>
+              <dt>Quiet mode active</dt><dd id="used-quiet"></dd>
+            </dl>
+          </section>
+        </ha-card>
+      </div>`;
+
+    this.shadowRoot.getElementById("override-engine").addEventListener("change", () => this._overrideEngineChanged());
+    this.shadowRoot.getElementById("override-language").addEventListener("change", () => this._overrideLanguageChanged());
+    this.shadowRoot.getElementById("set-override").addEventListener("click", () => this._setOverride());
+    this.shadowRoot.getElementById("clear-override").addEventListener("click", () => this._clearOverride());
     this.shadowRoot.getElementById("pipeline").addEventListener("change", () => this._pipelineChanged());
     this.shadowRoot.getElementById("engine").addEventListener("change", () => this._engineChanged());
     this.shadowRoot.getElementById("language").addEventListener("change", () => this._languageChanged());
@@ -94,15 +143,28 @@ class AdaptiveTtsPanel extends HTMLElement {
       this._data = await this._hass.callWS({ type: "adaptive_tts/info" });
       const pipeline = this.shadowRoot.getElementById("pipeline");
       for (const item of this._data.pipelines) this._appendOption(pipeline, item.id, item.name);
+
       const engine = this.shadowRoot.getElementById("engine");
       for (const item of this._data.engines) {
         const suffix = item.is_adaptive ? " (Adaptive)" : " (Source)";
         this._appendOption(engine, item.engine_id, `${item.name}${suffix}`);
       }
       if (!this._data.engines.length) throw new Error("No TTS entities are currently available.");
+
+      const overrideEngine = this.shadowRoot.getElementById("override-engine");
+      for (const item of this._data.engines.filter((candidate) => candidate.is_adaptive)) {
+        this._appendOption(overrideEngine, item.engine_id, item.name);
+      }
+      const hasAdaptive = overrideEngine.options.length > 0;
+      this.shadowRoot.getElementById("set-override").disabled = !hasAdaptive;
+      this.shadowRoot.getElementById("clear-override").disabled = !hasAdaptive;
+      if (hasAdaptive) await this._overrideEngineChanged();
+      else this._showOverrideError("No Adaptive TTS entities are currently available.");
+
       await this._engineChanged();
     } catch (err) {
       this._showError(err);
+      this._showOverrideError(err);
     }
   }
 
@@ -111,6 +173,86 @@ class AdaptiveTtsPanel extends HTMLElement {
     option.value = value ?? "";
     option.textContent = label;
     select.append(option);
+  }
+
+  async _overrideEngineChanged() {
+    this._clearOverrideMessages();
+    const engineId = this.shadowRoot.getElementById("override-engine").value;
+    if (!engineId) return;
+    try {
+      this._overrideEngineInfo = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId });
+      const language = this.shadowRoot.getElementById("override-language");
+      language.replaceChildren();
+      for (const item of this._overrideEngineInfo.supported_languages) this._appendOption(language, item, item);
+      if (this._overrideEngineInfo.default_language && this._overrideEngineInfo.supported_languages.includes(this._overrideEngineInfo.default_language)) {
+        language.value = this._overrideEngineInfo.default_language;
+      }
+      await this._overrideLanguageChanged();
+    } catch (err) {
+      this._showOverrideError(err);
+    }
+  }
+
+  async _overrideLanguageChanged() {
+    this._clearOverrideMessages();
+    const engineId = this.shadowRoot.getElementById("override-engine").value;
+    const language = this.shadowRoot.getElementById("override-language").value;
+    if (!engineId || !language) return;
+    try {
+      this._overrideEngineInfo = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId, language });
+      const voice = this.shadowRoot.getElementById("override-voice");
+      voice.replaceChildren();
+      for (const item of this._overrideEngineInfo.voices) this._appendOption(voice, item.voice_id, item.name);
+      const hasVoices = voice.options.length > 0;
+      this.shadowRoot.getElementById("set-override").disabled = !hasVoices;
+      if (!hasVoices) this._showOverrideError("The wrapped TTS provider does not expose selectable voices for this language.");
+    } catch (err) {
+      this._showOverrideError(err);
+    }
+  }
+
+  async _setOverride() {
+    this._clearOverrideMessages();
+    const button = this.shadowRoot.getElementById("set-override");
+    button.disabled = true;
+    try {
+      const entityId = this.shadowRoot.getElementById("override-engine").value;
+      const language = this.shadowRoot.getElementById("override-language").value;
+      const voice = this.shadowRoot.getElementById("override-voice").value;
+      const duration = this.shadowRoot.getElementById("override-duration").value;
+      if (!entityId || !language || !voice) throw new Error("Choose an Adaptive TTS entity, language, and voice first.");
+      await this._hass.callService("adaptive_tts", "set_voice_override", {
+        entity_id: entityId,
+        language,
+        voice,
+        duration,
+      });
+      const durationLabel = duration === "next_request" ? "the next TTS request" : "until changed again";
+      this.shadowRoot.getElementById("override-success").textContent = `Voice override set for ${durationLabel}.`;
+    } catch (err) {
+      this._showOverrideError(err);
+    } finally {
+      button.disabled = this.shadowRoot.getElementById("override-voice").options.length === 0;
+    }
+  }
+
+  async _clearOverride() {
+    this._clearOverrideMessages();
+    const button = this.shadowRoot.getElementById("clear-override");
+    button.disabled = true;
+    try {
+      const entityId = this.shadowRoot.getElementById("override-engine").value;
+      if (!entityId) throw new Error("Choose an Adaptive TTS entity first.");
+      await this._hass.callService("adaptive_tts", "clear_voice_override", {
+        entity_id: entityId,
+        scope: "all",
+      });
+      this.shadowRoot.getElementById("override-success").textContent = "Voice override cleared.";
+    } catch (err) {
+      this._showOverrideError(err);
+    } finally {
+      button.disabled = false;
+    }
   }
 
   async _pipelineChanged() {
@@ -228,6 +370,15 @@ class AdaptiveTtsPanel extends HTMLElement {
     if (this.shadowRoot.getElementById("result").style.display === "none") return;
     this._clearResult();
     this._showError("Preview audio could not be retrieved. Check the Home Assistant logs for the provider error.");
+  }
+
+  _clearOverrideMessages() {
+    this.shadowRoot.getElementById("override-error").textContent = "";
+    this.shadowRoot.getElementById("override-success").textContent = "";
+  }
+
+  _showOverrideError(err) {
+    this.shadowRoot.getElementById("override-error").textContent = err?.message || String(err);
   }
 
   _clearError() { this.shadowRoot.getElementById("error").textContent = ""; }
