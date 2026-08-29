@@ -17,6 +17,7 @@ from .const import (
     CONF_UNDERLYING_TTS_ENTITY,
     DATA_ENTITIES,
     DATA_FRONTEND_REGISTERED,
+    DATA_SERVICES_REGISTERED,
     DOMAIN,
     PANEL_URL_PATH,
     PANEL_WEB_COMPONENT,
@@ -24,6 +25,7 @@ from .const import (
 )
 from .helpers import entry_config, is_adaptive_entity
 from .preview import async_register_websocket_commands
+from .services import async_register_services
 
 PLATFORMS = [Platform.TTS]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -32,8 +34,17 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up shared Adaptive TTS frontend and backend resources."""
     domain_data = hass.data.setdefault(
-        DOMAIN, {DATA_ENTITIES: {}, DATA_FRONTEND_REGISTERED: False}
+        DOMAIN,
+        {
+            DATA_ENTITIES: {},
+            DATA_FRONTEND_REGISTERED: False,
+            DATA_SERVICES_REGISTERED: False,
+        },
     )
+    domain_data.setdefault(DATA_ENTITIES, {})
+    domain_data.setdefault(DATA_FRONTEND_REGISTERED, False)
+    domain_data.setdefault(DATA_SERVICES_REGISTERED, False)
+
     if not domain_data[DATA_FRONTEND_REGISTERED]:
         frontend_path = Path(__file__).parent / "frontend"
         await hass.http.async_register_static_paths(
@@ -49,6 +60,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         )
         async_register_websocket_commands(hass)
         domain_data[DATA_FRONTEND_REGISTERED] = True
+
+    if not domain_data[DATA_SERVICES_REGISTERED]:
+        async_register_services(hass)
+        domain_data[DATA_SERVICES_REGISTERED] = True
+
     return True
 
 

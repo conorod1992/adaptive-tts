@@ -1,0 +1,62 @@
+set_voice_override:
+  name: Set voice override
+  description: >-
+    Override the voice used by an Adaptive TTS entity for the next TTS request
+    or persistently until it is changed or cleared.
+  target:
+    entity:
+      integration: adaptive_tts
+      domain: tts
+  fields:
+    language:
+      name: Language
+      description: >-
+        Language/accent code for this voice override, such as en-GB. Voices are
+        language-specific, so choose the language that exposes the desired voice.
+      required: true
+      example: en-GB
+      selector:
+        text:
+    voice:
+      name: Voice
+      description: Voice ID exposed by the wrapped TTS provider for the language.
+      required: true
+      example: en-GB-RyanNeural:whispering
+      selector:
+        text:
+    duration:
+      name: Duration
+      description: Apply once or keep using this voice until changed or cleared.
+      required: true
+      default: next_request
+      selector:
+        select:
+          options:
+            - label: Next TTS request
+              value: next_request
+            - label: Until changed again
+              value: until_changed
+
+clear_voice_override:
+  name: Clear voice override
+  description: >-
+    Clear a pending one-shot voice override, the persistent override, or both.
+  target:
+    entity:
+      integration: adaptive_tts
+      domain: tts
+  fields:
+    scope:
+      name: Scope
+      description: Choose which voice override state to clear.
+      required: true
+      default: all
+      selector:
+        select:
+          options:
+            - label: All overrides
+              value: all
+            - label: Next-request override only
+              value: next_request
+            - label: Persistent override only
+              value: persistent
