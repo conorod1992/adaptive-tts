@@ -79,9 +79,10 @@ def _override_selector(
 ) -> selector.SelectSelector | selector.TextSelector:
     """Build a voice dropdown when enumeration is available, else text input."""
     if option == "voice":
-        voices = provider.async_get_supported_voices(
-            language or provider.default_language
-        ) or []
+        voices = (
+            provider.async_get_supported_voices(language or provider.default_language)
+            or []
+        )
         if voices:
             return selector.SelectSelector(
                 selector.SelectSelectorConfig(
