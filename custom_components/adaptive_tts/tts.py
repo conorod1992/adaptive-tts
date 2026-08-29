@@ -281,7 +281,9 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(f"Unsupported voice override duration: {duration}")
         self._persistent_voice_override = override
         if self._override_store is None:
-            raise HomeAssistantError("Adaptive TTS voice override storage is unavailable")
+            raise HomeAssistantError(
+                "Adaptive TTS voice override storage is unavailable"
+            )
         await self._override_store.async_save(
             {"language": override.language, "voice": override.voice}
         )
