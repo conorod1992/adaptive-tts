@@ -104,10 +104,11 @@ Adaptive TTS exposes two Home Assistant actions.
 
 Targets one or more Adaptive TTS entities and accepts:
 
-- **Voice** — the provider voice ID to use.
-- **Language** — optional language/accent code such as `en-GB`. If supplied,
-  synthesis uses that language while the override is active. If omitted, the
-  request's effective language is retained.
+- **Language** — the language/accent code, such as `en-GB`. This is explicit
+  because provider voices are language-specific and prevents accidentally
+  pairing a voice with the quiet-hours or pipeline language from another
+  accent family.
+- **Voice** — the provider voice ID exposed for that language.
 - **Duration**:
   - **Next TTS request** — use the override once, then automatically return to
     the normal/quiet-hours policy.
