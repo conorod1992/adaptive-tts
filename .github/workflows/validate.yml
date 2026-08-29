@@ -31,6 +31,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # HACS' raw-file validators cannot authenticate to private repositories.
+      # Validate those checked-out files here and retain the official action for
+      # all repository/API-backed checks.
+      - name: Validate HACS and integration manifests
+        run: |
+          jq -e 'type == "object" and (.name | type == "string" and length > 0)' hacs.json
+          jq -e '
+            . as $manifest
+            | type == "object"
+              and .domain == "adaptive_tts"
+              and (["name", "documentation", "issue_tracker", "version"] | all(. as $key | $manifest[$key] | type == "string" and length > 0))
+              and (.codeowners | type == "array" and length > 0)
+          ' custom_components/adaptive_tts/manifest.json
       - uses: hacs/action@main
         with:
           category: integration
+          ignore: hacsjson integration_manifest
