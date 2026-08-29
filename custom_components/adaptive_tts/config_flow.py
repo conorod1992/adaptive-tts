@@ -60,6 +60,30 @@ def _option_selector(options: list[str], default: str) -> selector.SelectSelecto
     )
 
 
+def _override_selector(
+    provider, option: str
+) -> selector.SelectSelector | selector.TextSelector:
+    """Build a voice dropdown when enumeration is available, else text input."""
+    if option == "voice":
+        voices = provider.async_get_supported_voices(provider.default_language) or []
+        if voices:
+            return selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(
+                            value=voice.voice_id, label=voice.name or voice.voice_id
+                        )
+                        for voice in voices
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    custom_value=True,
+                )
+            )
+    return selector.TextSelector(
+        selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+    )
+
+
 class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle an Adaptive TTS config flow."""
 
@@ -151,18 +175,14 @@ class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
             value = user_input[CONF_QUIET_VALUE].strip()
             if not value:
                 errors[CONF_QUIET_VALUE] = "override_required"
-            elif self._pending[CONF_QUIET_OPTION] == "voice":
-                voices = provider.async_get_supported_voices(provider.default_language)
-                if voices and value not in {voice.voice_id for voice in voices}:
-                    errors[CONF_QUIET_VALUE] = "unsupported_override"
             if not errors:
                 self._pending[CONF_QUIET_VALUE] = value
                 return self._create_entry()
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_QUIET_VALUE): selector.TextSelector(
-                    selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                vol.Required(CONF_QUIET_VALUE): _override_selector(
+                    provider, self._pending[CONF_QUIET_OPTION]
                 )
             }
         )
@@ -272,10 +292,6 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
             value = user_input[CONF_QUIET_VALUE].strip()
             if not value:
                 errors[CONF_QUIET_VALUE] = "override_required"
-            elif self._pending[CONF_QUIET_OPTION] == "voice":
-                voices = provider.async_get_supported_voices(provider.default_language)
-                if voices and value not in {voice.voice_id for voice in voices}:
-                    errors[CONF_QUIET_VALUE] = "unsupported_override"
             if not errors:
                 self._pending[CONF_QUIET_VALUE] = value
                 return self.async_create_entry(title="", data=self._pending)
@@ -285,7 +301,10 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_QUIET_VALUE,
                     default=self._config.get(CONF_QUIET_VALUE, ""),
-                ): selector.TextSelector()
+                ): _override_selector(
+                    provider,
+                    self._pending[CONF_QUIET_OPTION],
+                )
             }
         )
         return self.async_show_form(

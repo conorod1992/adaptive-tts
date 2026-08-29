@@ -5,11 +5,14 @@ from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
-from homeassistant.components.tts import TextToSpeechEntity, Voice
+from homeassistant.components import tts as ha_tts
+from homeassistant.components.tts import TextToSpeechEntity, TTSAudioRequest, Voice
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.adaptive_tts.const import (
+    CACHE_POLICY_OPTION,
     CONF_QUIET_END,
     CONF_QUIET_MODE,
     CONF_QUIET_OPTION,
@@ -166,3 +169,164 @@ def test_unsupported_quiet_option(hass) -> None:
         pytest.raises(HomeAssistantError, match="not supported"),
     ):
         entity.resolve_request("en-US", {})
+
+
+def test_runtime_voice_validation_uses_actual_language(hass) -> None:
+    """A quiet voice is validated for the request language, not the default."""
+    source = MockTTS()
+    source.async_get_supported_voices = lambda language: (
+        [Voice("whisper", "Whisper")]
+        if language == "en-US"
+        else [Voice("british", "British")]
+    )
+    entity = AdaptiveTTSEntity(make_entry(quiet=True, value="whisper"))
+    attach(entity, hass, source)
+    with (
+        patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
+        pytest.raises(HomeAssistantError, match="for en-GB"),
+    ):
+        entity.resolve_request("en-GB", {})
+
+
+@pytest.mark.asyncio
+async def test_provider_home_assistant_error_is_preserved(hass) -> None:
+    """Useful Home Assistant provider errors propagate without replacement."""
+    source = MockTTS()
+    provider_error = HomeAssistantError("provider quota exhausted")
+
+    async def fail(message, language, options):
+        raise provider_error
+
+    source.async_get_tts_audio = fail
+    entity = AdaptiveTTSEntity(make_entry())
+    attach(entity, hass, source)
+    with (
+        patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
+        pytest.raises(HomeAssistantError) as raised,
+    ):
+        await entity.async_get_tts_audio("hello", "en-US", {})
+    assert raised.value is provider_error
+
+
+def test_missing_provider_has_no_fake_english_capabilities(hass) -> None:
+    """An unavailable wrapper does not advertise invented English support."""
+    entity = AdaptiveTTSEntity(make_entry())
+    entity.hass = hass
+    with patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=None):
+        assert entity.available is False
+        assert entity.default_language == ""
+        assert entity.supported_languages == []
+
+
+@pytest.mark.asyncio
+async def test_manager_cache_separates_normal_and_quiet_policy(hass, tmp_path) -> None:
+    """The real HA manager cache cannot reuse audio across policy boundaries."""
+    hass.config.config_dir = str(tmp_path)
+    assert await async_setup_component(hass, "tts", {"tts": [{"cache": False}]})
+    hass.data[ha_tts.DATA_TTS_MANAGER].use_file_cache = False
+    source = MockTTS()
+
+    async def audio_for_voice(message, language, options):
+        source.calls.append((message, language, dict(options)))
+        return "mp3", options["voice"].encode()
+
+    source.async_get_tts_audio = audio_for_voice
+    entity = AdaptiveTTSEntity(make_entry(quiet=True, start="23:00:00", end="07:00:00"))
+    attach(entity, hass, source)
+    now = [datetime(2026, 8, 29, 12, 0)]
+
+    async def internal_get(message, language, options):
+        return await entity.async_get_tts_audio(message, language, options)
+
+    def engine_for_id(_hass, engine_id):
+        return entity if engine_id == "tts.adaptive" else source
+
+    with (
+        patch(
+            "custom_components.adaptive_tts.tts.get_tts_entity",
+            return_value=source,
+        ),
+        patch(
+            "custom_components.adaptive_tts.tts.dt_util.now",
+            side_effect=lambda: now[0],
+        ),
+        patch(
+            "homeassistant.components.tts.get_engine_instance",
+            side_effect=engine_for_id,
+        ),
+        patch.object(
+            entity,
+            "async_internal_get_tts_audio",
+            side_effect=internal_get,
+        ),
+    ):
+        normal = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
+        # Policy is sampled with the outer cache identity. Crossing the boundary
+        # before consumption must not generate quiet audio under the normal key.
+        now[0] = datetime(2026, 8, 29, 23, 30)
+        normal.async_set_message("Good night")
+        normal_audio = b"".join([chunk async for chunk in normal.async_stream_result()])
+
+        quiet = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
+        quiet.async_set_message("Good night")
+        quiet_audio = b"".join([chunk async for chunk in quiet.async_stream_result()])
+
+        now[0] = datetime(2026, 8, 30, 12, 0)
+        normal_again = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
+        normal_again.async_set_message("Good night")
+        normal_again_audio = b"".join(
+            [chunk async for chunk in normal_again.async_stream_result()]
+        )
+
+    assert normal_audio == b"normal"
+    assert quiet_audio == b"whisper"
+    assert normal_again_audio == b"normal"
+    assert len(source.calls) == 2
+    assert all("_adaptive_tts_policy" not in call[2] for call in source.calls)
+    assert normal.options != quiet.options
+
+
+def test_policy_configuration_change_updates_cache_fingerprint(hass) -> None:
+    """Changing quiet policy configuration differentiates future cache entries."""
+    source = MockTTS()
+    entry = make_entry(quiet=True)
+    entry.add_to_hass(hass)
+    entity = AdaptiveTTSEntity(entry)
+    attach(entity, hass, source)
+    with (
+        patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
+        patch(
+            "custom_components.adaptive_tts.tts.dt_util.now",
+            return_value=datetime(2026, 8, 29, 1, 0),
+        ),
+    ):
+        before = entity.default_options[CACHE_POLICY_OPTION]
+        hass.config_entries.async_update_entry(
+            entry, options={CONF_QUIET_VALUE: "softer-whisper"}
+        )
+        after = entity.default_options[CACHE_POLICY_OPTION]
+    assert before != after
+
+
+@pytest.mark.asyncio
+async def test_cache_fingerprint_does_not_leak_through_stream_fallback(hass) -> None:
+    """Wrapper-only metadata is removed before fallback streaming delegation."""
+    source = MockTTS()
+    entity = AdaptiveTTSEntity(make_entry())
+    attach(entity, hass, source)
+
+    async def message_gen():
+        yield "hello"
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        response = await entity.async_stream_tts_audio(
+            TTSAudioRequest(
+                "en-US",
+                {CACHE_POLICY_OPTION: "internal", "speed": "slow"},
+                message_gen(),
+            )
+        )
+        assert b"".join([chunk async for chunk in response.data_gen]) == b"source-audio"
+    assert CACHE_POLICY_OPTION not in source.calls[0][2]

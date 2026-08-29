@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
+from .const import CACHE_POLICY_OPTION
 from .tts import AdaptiveTTSEntity
 
 
@@ -45,7 +46,13 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
         "default_language": engine.default_language,
         "supported_languages": list(engine.supported_languages),
         "supported_options": list(engine.supported_options or []),
-        "default_options": _json_value(dict(engine.default_options or {})),
+        "default_options": _json_value(
+            {
+                key: value
+                for key, value in dict(engine.default_options or {}).items()
+                if key != CACHE_POLICY_OPTION
+            }
+        ),
         "voices": [
             {"voice_id": voice.voice_id, "name": voice.name} for voice in voices
         ],
@@ -118,15 +125,15 @@ def websocket_engine(
         vol.Optional("options", default={}): dict,
     }
 )
-@callback
-def websocket_generate(
+@websocket_api.async_response
+async def websocket_generate(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
     """Create a bounded, memory-only Home Assistant TTS preview stream."""
     try:
-        result = create_preview(hass, msg)
+        result = await create_preview(hass, msg)
     except (HomeAssistantError, ValueError) as err:
         connection.send_error(
             msg["id"], websocket_api.ERR_UNKNOWN_ERROR, f"TTS generation failed: {err}"
@@ -136,9 +143,8 @@ def websocket_generate(
     connection.send_result(msg["id"], result)
 
 
-@callback
-def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
-    """Create a native, bounded TTS preview and return frontend metadata."""
+async def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
+    """Generate a bounded TTS preview before returning replay metadata."""
     stream = tts.async_create_stream(
         hass,
         engine=msg["engine_id"],
@@ -167,6 +173,17 @@ def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     # A message stream always uses HA's in-memory cache path, even for a
     # provider that internally falls back to one-shot synthesis.
     stream.async_set_message_stream(message_gen())
+    try:
+        audio = b"".join([chunk async for chunk in stream.async_stream_result()])
+    except HomeAssistantError:
+        stream.delete()
+        raise
+    except Exception as err:
+        stream.delete()
+        raise HomeAssistantError(str(err)) from err
+    if not audio:
+        stream.delete()
+        raise HomeAssistantError("The provider returned no preview audio")
     return {
         "url": stream.url,
         "extension": stream.extension,

@@ -1,7 +1,7 @@
 """Tests for the temporary preview backend."""
 
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -24,6 +24,15 @@ class FakeStream:
 
     def async_set_message_stream(self, message_stream) -> None:
         self.message_stream = message_stream
+
+    async def async_stream_result(self):
+        """Generate replayable audio as the real result stream does."""
+        message = "".join([chunk async for chunk in self.message_stream])
+        yield message.encode()
+
+    def delete(self) -> None:
+        """Record eager cleanup after a failed preview."""
+        self.deleted = True
 
 
 class FakeConnection:
@@ -56,7 +65,7 @@ async def test_preview_uses_replayable_memory_only_native_stream(hass) -> None:
             return_value=source,
         ),
     ):
-        result = create_preview(
+        result = await create_preview(
             hass,
             {
                 "engine_id": "tts.source",
@@ -70,10 +79,11 @@ async def test_preview_uses_replayable_memory_only_native_stream(hass) -> None:
     assert result["quiet_mode_active"] is False
     assert "in-memory" in result["storage"]
     assert stream.permanent_writes == 0
-    assert "".join([chunk async for chunk in stream.message_stream]) == "Preview text"
+    assert stream.message_stream is not None
 
 
-def test_preview_has_no_integration_owned_audio_store(hass) -> None:
+@pytest.mark.asyncio
+async def test_preview_has_no_integration_owned_audio_store(hass) -> None:
     """Repeated previews are handed to HA and never accumulate in this integration."""
     source = MockTTS()
     source.hass = hass
@@ -89,7 +99,7 @@ def test_preview_has_no_integration_owned_audio_store(hass) -> None:
         ),
     ):
         results = [
-            create_preview(
+            await create_preview(
                 hass,
                 {"engine_id": "tts.source", "message": str(index), "options": {}},
             )
@@ -100,18 +110,66 @@ def test_preview_has_no_integration_owned_audio_store(hass) -> None:
     assert not hasattr(hass.data.get("adaptive_tts", {}), "preview_audio")
 
 
-def test_generate_websocket_handler_returns_preview_metadata(hass) -> None:
+@pytest.mark.asyncio
+async def test_generate_websocket_handler_returns_preview_metadata(hass) -> None:
     """The WebSocket command sends preview metadata to its caller."""
     connection = FakeConnection()
     expected = {"url": "/api/tts_proxy/test.mp3", "quiet_mode_active": True}
     with patch(
         "custom_components.adaptive_tts.preview.create_preview",
-        return_value=expected,
+        new=AsyncMock(return_value=expected),
     ):
-        websocket_generate.__wrapped__(
+        await websocket_generate.__wrapped__.__wrapped__(
             hass,
             connection,
             {"id": 7, "engine_id": "tts.adaptive", "message": "test", "options": {}},
         )
     assert connection.result == (7, expected)
     assert connection.error is None
+
+
+@pytest.mark.asyncio
+async def test_preview_reports_provider_failure_during_synthesis(hass) -> None:
+    """A provider error raised while loading audio fails the WebSocket request."""
+    source = MockTTS()
+    source.hass = hass
+    stream = FakeStream()
+
+    async def fail_during_synthesis():
+        raise RuntimeError("provider quota exhausted")
+        yield b""  # pragma: no cover
+
+    stream.async_stream_result = fail_during_synthesis
+    connection = FakeConnection()
+    with (
+        patch(
+            "custom_components.adaptive_tts.preview.tts.async_create_stream",
+            return_value=stream,
+        ),
+        patch(
+            "custom_components.adaptive_tts.preview.get_engine_instance",
+            return_value=source,
+        ),
+    ):
+        await websocket_generate.__wrapped__.__wrapped__(
+            hass,
+            connection,
+            {"id": 8, "engine_id": "tts.source", "message": "test", "options": {}},
+        )
+
+    assert connection.result is None
+    assert connection.error is not None
+    assert "provider quota exhausted" in connection.error[2]
+    assert stream.deleted is True
+
+
+def test_frontend_clears_stale_results_and_handles_audio_errors() -> None:
+    """The panel clears old metadata and reports proxy playback failures."""
+    from pathlib import Path
+
+    panel = Path(
+        "custom_components/adaptive_tts/frontend/adaptive-tts-panel.js"
+    ).read_text()
+    assert "this._clearResult();" in panel
+    assert 'addEventListener("error"' in panel
+    assert "Preview audio could not be retrieved" in panel

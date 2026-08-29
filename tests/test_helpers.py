@@ -16,4 +16,6 @@ def test_normal_range_and_equal_boundaries() -> None:
     """Normal ranges and a full-day equal-boundary policy work."""
     assert is_time_in_range(time(12, 0), "08:00:00", "17:00:00")
     assert not is_time_in_range(time(17, 0), "08:00:00", "17:00:00")
-    assert is_time_in_range(time(12, 0), "00:00:00", "00:00:00")
+    assert is_time_in_range(time(0, 0), "07:00:00", "07:00:00")
+    assert is_time_in_range(time(12, 0), "07:00:00", "07:00:00")
+    assert is_time_in_range(time(23, 59), "07:00:00", "07:00:00")

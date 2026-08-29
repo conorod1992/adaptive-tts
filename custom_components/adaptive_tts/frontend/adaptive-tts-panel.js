@@ -85,6 +85,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     this.shadowRoot.getElementById("engine").addEventListener("change", () => this._engineChanged());
     this.shadowRoot.getElementById("language").addEventListener("change", () => this._languageChanged());
     this.shadowRoot.getElementById("generate").addEventListener("click", () => this._generate());
+    this.shadowRoot.getElementById("audio").addEventListener("error", () => this._audioFailed());
   }
 
   async _load() {
@@ -176,6 +177,7 @@ class AdaptiveTtsPanel extends HTMLElement {
 
   async _generate() {
     this._clearError();
+    this._clearResult();
     const button = this.shadowRoot.getElementById("generate");
     button.disabled = true;
     const options = {};
@@ -204,10 +206,28 @@ class AdaptiveTtsPanel extends HTMLElement {
       this.shadowRoot.getElementById("used-quiet").textContent = result.quiet_mode_active ? "Yes" : "No";
       this.shadowRoot.getElementById("result").style.display = "block";
     } catch (err) {
+      this._clearResult();
       this._showError(err);
     } finally {
       button.disabled = false;
     }
+  }
+
+  _clearResult() {
+    const result = this.shadowRoot.getElementById("result");
+    result.style.display = "none";
+    const audio = this.shadowRoot.getElementById("audio");
+    audio.pause();
+    audio.removeAttribute("src");
+    for (const id of ["used-engine", "used-underlying", "used-language", "used-options", "used-quiet"]) {
+      this.shadowRoot.getElementById(id).textContent = "";
+    }
+  }
+
+  _audioFailed() {
+    if (this.shadowRoot.getElementById("result").style.display === "none") return;
+    this._clearResult();
+    this._showError("Preview audio could not be retrieved. Check the Home Assistant logs for the provider error.");
   }
 
   _clearError() { this.shadowRoot.getElementById("error").textContent = ""; }

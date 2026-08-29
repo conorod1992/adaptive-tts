@@ -12,7 +12,7 @@
       },
       "policy": {
         "title": "Configure quiet hours",
-        "description": "The selected provider's supported option names are shown below. Home Assistant Cloud voice variants use the voice option.",
+        "description": "The selected provider's supported option names are shown below. Home Assistant Cloud voice variants use the voice option. If the start and end times are the same, quiet mode is active all day.",
         "data": {
           "quiet_mode": "Quiet mode enabled",
           "quiet_start": "Quiet hours start",
@@ -22,7 +22,7 @@
       },
       "override": {
         "title": "Configure the quiet override",
-        "description": "Enter the provider's exact voice/style value. Use the TTS Test panel to inspect supported voice IDs.",
+        "description": "Choose a listed voice when available, or enter the provider's exact voice/style value. Voice availability can vary by request language.",
         "data": {
           "quiet_value": "Quiet voice/style value"
         }
@@ -32,8 +32,7 @@
       "provider_not_found": "The selected TTS entity is not currently available.",
       "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
       "unsupported_option": "The selected option is not supported by this provider.",
-      "override_required": "Enter a quiet voice/style value.",
-      "unsupported_override": "This voice is not supported for the provider's default language."
+      "override_required": "Enter a quiet voice/style value."
     },
     "abort": {
       "provider_not_found": "The selected TTS entity is no longer available."
@@ -49,6 +48,7 @@
       },
       "policy": {
         "title": "Update quiet hours",
+        "description": "If the start and end times are the same, quiet mode is active all day.",
         "data": {
           "quiet_mode": "Quiet mode enabled",
           "quiet_start": "Quiet hours start",
@@ -58,6 +58,7 @@
       },
       "override": {
         "title": "Update the quiet override",
+        "description": "Choose a listed voice when available, or enter the provider's exact voice/style value. Voice availability can vary by request language.",
         "data": {
           "quiet_value": "Quiet voice/style value"
         }
@@ -67,8 +68,7 @@
       "provider_not_found": "The selected TTS entity is not currently available.",
       "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
       "unsupported_option": "The selected option is not supported by this provider.",
-      "override_required": "Enter a quiet voice/style value.",
-      "unsupported_override": "This voice is not supported for the provider's default language."
+      "override_required": "Enter a quiet voice/style value."
     },
     "abort": {
       "provider_not_found": "The selected TTS entity is no longer available."
