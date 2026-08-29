@@ -4,7 +4,6 @@
   "codeowners": ["@conorod1992"],
   "config_flow": true,
   "dependencies": ["assist_pipeline", "frontend", "http", "panel_custom", "tts"],
-  "diagnostics": true,
   "documentation": "https://github.com/conorod1992/adaptive-tts",
   "integration_type": "service",
   "iot_class": "calculated",
