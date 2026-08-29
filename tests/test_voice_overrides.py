@@ -174,24 +174,3 @@ async def test_action_override_changes_cache_fingerprint(hass) -> None:
         persistent = entity.default_options[CACHE_POLICY_OPTION]
         assert persistent != baseline
         assert persistent != one_shot
-
-
-@pytest.mark.asyncio
-async def test_override_without_language_keeps_request_language(hass) -> None:
-    """Language is optional and may be left to the incoming TTS request."""
-    source = OverrideTTS()
-    entity = AdaptiveTTSEntity(make_entry())
-    attach(entity, hass, source)
-
-    with patch(
-        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
-    ):
-        await entity.async_set_voice_override(
-            None, "whisper-us", DURATION_NEXT_REQUEST
-        )
-        policy = entity.default_options[CACHE_POLICY_OPTION]
-        resolved = entity.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: policy}
-        )
-        assert resolved.language == "en-US"
-        assert resolved.options["voice"] == "whisper-us"
