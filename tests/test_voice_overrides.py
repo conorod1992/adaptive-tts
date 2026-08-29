@@ -90,17 +90,13 @@ async def test_next_request_override_is_consumed_once(hass) -> None:
             "en-GB", "cheerful-gb", DURATION_NEXT_REQUEST
         )
         first_policy = entity.default_options[CACHE_POLICY_OPTION]
-        first = entity.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: first_policy}
-        )
+        first = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: first_policy})
         assert first.language == "en-GB"
         assert first.options["voice"] == "cheerful-gb"
         assert entity.next_voice_override is None
 
         second_policy = entity.default_options[CACHE_POLICY_OPTION]
-        second = entity.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: second_policy}
-        )
+        second = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: second_policy})
         assert second.language == "en-GB"
         assert second.options["voice"] == "whisper-gb"
 
@@ -131,9 +127,7 @@ async def test_persistent_override_survives_reload(hass, tmp_path) -> None:
         assert reloaded.persistent_voice_override.language == "en-GB"
 
         policy = reloaded.default_options[CACHE_POLICY_OPTION]
-        resolved = reloaded.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: policy}
-        )
+        resolved = reloaded.resolve_request("en-US", {CACHE_POLICY_OPTION: policy})
         assert resolved.language == "en-GB"
         assert resolved.options["voice"] == "cheerful-gb"
 
