@@ -1,0 +1,50 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install -r requirements_test.txt
+      - run: python -m pytest
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # HACS' raw-file validators cannot authenticate to private repositories.
+      # Validate those checked-out files here and retain the official action for
+      # all repository/API-backed checks.
+      - name: Validate HACS and integration manifests
+        run: |
+          jq -e 'type == "object" and (.name | type == "string" and length > 0)' hacs.json
+          jq -e '
+            . as $manifest
+            | type == "object"
+              and .domain == "adaptive_tts"
+              and (["name", "documentation", "issue_tracker", "version"] | all(. as $key | $manifest[$key] | type == "string" and length > 0))
+              and (.codeowners | type == "array" and length > 0)
+          ' custom_components/adaptive_tts/manifest.json
+      - uses: hacs/action@main
+        with:
+          category: integration
+          ignore: hacsjson integration_manifest

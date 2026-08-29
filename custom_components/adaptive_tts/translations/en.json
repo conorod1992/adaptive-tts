@@ -1,0 +1,77 @@
+{
+  "title": "Adaptive TTS",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Create an Adaptive TTS entity",
+        "description": "Choose the TTS entity Adaptive TTS should wrap.",
+        "data": {
+          "name": "Name",
+          "underlying_tts_entity": "Underlying TTS entity"
+        }
+      },
+      "policy": {
+        "title": "Configure quiet hours",
+        "description": "The selected provider's supported option names are shown below. Home Assistant Cloud voice variants use the voice option.",
+        "data": {
+          "quiet_mode": "Quiet mode enabled",
+          "quiet_start": "Quiet hours start",
+          "quiet_end": "Quiet hours end",
+          "quiet_option": "Voice/style option to override"
+        }
+      },
+      "override": {
+        "title": "Configure the quiet override",
+        "description": "Enter the provider's exact voice/style value. Use the TTS Test panel to inspect supported voice IDs.",
+        "data": {
+          "quiet_value": "Quiet voice/style value"
+        }
+      }
+    },
+    "error": {
+      "provider_not_found": "The selected TTS entity is not currently available.",
+      "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
+      "unsupported_option": "The selected option is not supported by this provider.",
+      "override_required": "Enter a quiet voice/style value.",
+      "unsupported_override": "This voice is not supported for the provider's default language."
+    },
+    "abort": {
+      "provider_not_found": "The selected TTS entity is no longer available."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Change underlying provider",
+        "data": {
+          "underlying_tts_entity": "Underlying TTS entity"
+        }
+      },
+      "policy": {
+        "title": "Update quiet hours",
+        "data": {
+          "quiet_mode": "Quiet mode enabled",
+          "quiet_start": "Quiet hours start",
+          "quiet_end": "Quiet hours end",
+          "quiet_option": "Voice/style option to override"
+        }
+      },
+      "override": {
+        "title": "Update the quiet override",
+        "data": {
+          "quiet_value": "Quiet voice/style value"
+        }
+      }
+    },
+    "error": {
+      "provider_not_found": "The selected TTS entity is not currently available.",
+      "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
+      "unsupported_option": "The selected option is not supported by this provider.",
+      "override_required": "Enter a quiet voice/style value.",
+      "unsupported_override": "This voice is not supported for the provider's default language."
+    },
+    "abort": {
+      "provider_not_found": "The selected TTS entity is no longer available."
+    }
+  }
+}
