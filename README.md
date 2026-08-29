@@ -43,8 +43,8 @@ changes supported TTS presentation options during audio synthesis.
   wrapper loops.
 - Forwards streaming input when the underlying entity supports it; otherwise
   safely collects the text and uses one-shot synthesis.
-- Includes an admin-only TTS Test configuration panel with native temporary
-  audio playback and no permanent preview files.
+- Includes an admin-only Adaptive TTS panel for voice override controls and TTS
+  testing with native temporary audio playback.
 - Provides redacted diagnostics without generated speech text.
 
 ## Installation with HACS
@@ -107,7 +107,8 @@ Targets one or more Adaptive TTS entities and accepts:
 - **Language** — the language/accent code, such as `en-GB`. This is explicit
   because provider voices are language-specific and prevents accidentally
   pairing a voice with the quiet-hours or pipeline language from another
-  accent family.
+  accent family. The Home Assistant action editor uses its native language
+  selector for this field.
 - **Voice** — the provider voice ID exposed for that language.
 - **Duration**:
   - **Next TTS request** — use the override once, then automatically return to
@@ -137,13 +138,35 @@ Clears:
 Clearing the persistent override returns the entity to its ordinary pipeline
 and quiet-hours behavior.
 
-## TTS Test panel
+For manual use, the Adaptive TTS panel provides the same set/clear behavior
+without requiring voice IDs to be typed. It loads the wrapped provider's
+languages and then dynamically loads the voices available for the selected
+language.
+
+## Adaptive TTS panel
 
 Open the Adaptive TTS integration's **Configure** panel from **Settings →
 Devices & services**. The panel is registered as an integration configuration
 panel and does not add a permanent sidebar item.
 
+### Voice override
+
 The panel lets an administrator:
+
+- choose an Adaptive TTS entity;
+- choose one of the entity's supported languages;
+- choose a voice dynamically loaded from the wrapped provider for that
+  language;
+- set the voice for the **next TTS request** or **until changed again**; and
+- clear explicit voice overrides.
+
+These controls call the same `adaptive_tts.set_voice_override` and
+`adaptive_tts.clear_voice_override` actions used by automations. They do not
+introduce separate override state or modify the Assist pipeline.
+
+### TTS Test
+
+The TTS Test section lets an administrator:
 
 - choose an Assist pipeline and read its current `tts_engine`, `tts_language`,
   and `tts_voice` as test defaults;
@@ -220,12 +243,13 @@ For a Home Assistant Cloud manual test:
 4. Configure that variant as the Adaptive TTS quiet voice override.
 5. Generate through the wrapper inside and outside the configured time range;
    confirm the reported underlying entity, effective options, and quiet state.
-6. Call `adaptive_tts.set_voice_override` with **Next TTS request**, then run an
-   Assist request twice and confirm only the first uses that voice.
-7. Call it with **Until changed again**, restart Home Assistant, and confirm the
-   override remains active.
-8. Call `adaptive_tts.clear_voice_override` and confirm ordinary behavior
-   resumes.
+6. Use the panel or call `adaptive_tts.set_voice_override` with **Next TTS
+   request**, then run an Assist request twice and confirm only the first uses
+   that voice.
+7. Use **Until changed again**, restart Home Assistant, and confirm the override
+   remains active.
+8. Clear the override from the panel or call
+   `adaptive_tts.clear_voice_override` and confirm ordinary behavior resumes.
 9. Disable or remove the source provider and confirm the wrapper reports a
    clear unavailable-provider error.
 
