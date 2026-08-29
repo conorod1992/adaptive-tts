@@ -11,12 +11,11 @@ set_voice_override:
     language:
       name: Language
       description: >-
-        Language/accent code for this voice override, such as en-GB. Voices are
-        language-specific, so choose the language that exposes the desired voice.
+        Language/accent for this voice override. Voices are language-specific,
+        so choose the language that exposes the desired voice.
       required: true
-      example: en-GB
       selector:
-        text:
+        language:
     voice:
       name: Voice
       description: Voice ID exposed by the wrapped TTS provider for the language.
