@@ -15,6 +15,8 @@ from .const import (
     CONF_QUIET_START,
     CONF_QUIET_VALUE,
     CONF_UNDERLYING_TTS_ENTITY,
+    DATA_ENTITIES,
+    DOMAIN,
     VERSION,
 )
 from .helpers import entry_config, get_tts_entity
@@ -27,6 +29,11 @@ async def async_get_config_entry_diagnostics(
     config = entry_config(entry)
     entity_id = config[CONF_UNDERLYING_TTS_ENTITY]
     underlying = get_tts_entity(hass, entity_id)
+    adaptive_entity = hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {}).get(entry.entry_id)
+    persistent = (
+        adaptive_entity.persistent_voice_override if adaptive_entity is not None else None
+    )
+    pending = adaptive_entity.next_voice_override if adaptive_entity is not None else None
     return {
         "adaptive_tts_version": VERSION,
         "underlying_tts_entity_id": entity_id,
@@ -45,5 +52,12 @@ async def async_get_config_entry_diagnostics(
             "override_option": config[CONF_QUIET_OPTION],
             "override_language": config.get(CONF_QUIET_LANGUAGE),
             "override_value": config[CONF_QUIET_VALUE],
+        },
+        "voice_override": {
+            "persistent_language": persistent.language if persistent else None,
+            "persistent_voice": persistent.voice if persistent else None,
+            "next_request_pending": pending is not None,
+            "next_request_language": pending.language if pending else None,
+            "next_request_voice": pending.voice if pending else None,
         },
     }
