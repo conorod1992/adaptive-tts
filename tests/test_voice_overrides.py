@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.components.tts import TextToSpeechEntity, Voice
+from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.adaptive_tts.const import (
@@ -29,12 +30,13 @@ class OverrideTTS(TextToSpeechEntity):
 
     _attr_name = "Source TTS"
     _attr_default_language = "en-US"
-    _attr_supported_languages: ClassVar = ["en-US", "en-GB"]
+    _attr_supported_languages: ClassVar = ["en-US", "en-GB", "en-IE"]
     _attr_supported_options: ClassVar = ["voice"]
     _attr_default_options: ClassVar = {"voice": "normal-us"}
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
+        self.fail_generation = False
 
     def async_get_supported_voices(self, language: str) -> list[Voice] | None:
         if language == "en-GB":
@@ -43,12 +45,16 @@ class OverrideTTS(TextToSpeechEntity):
                 Voice("whisper-gb", "British Whisper"),
                 Voice("cheerful-gb", "British Cheerful"),
             ]
+        if language == "en-IE":
+            return [Voice("conor-ie", "Conor")]
         return [
             Voice("normal-us", "American"),
             Voice("whisper-us", "American Whisper"),
         ]
 
     async def async_get_tts_audio(self, message, language, options):
+        if self.fail_generation:
+            raise HomeAssistantError("provider rejected request")
         self.calls.append((message, language, dict(options)))
         return "mp3", options["voice"].encode()
 
@@ -93,12 +99,50 @@ async def test_next_request_override_is_consumed_once(hass) -> None:
         first = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: first_policy})
         assert first.language == "en-GB"
         assert first.options["voice"] == "cheerful-gb"
+        assert entity.next_voice_override is not None
+
+        await entity.async_get_tts_audio(
+            "First request", "en-US", {CACHE_POLICY_OPTION: first_policy}
+        )
         assert entity.next_voice_override is None
 
         second_policy = entity.default_options[CACHE_POLICY_OPTION]
         second = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: second_policy})
         assert second.language == "en-GB"
         assert second.options["voice"] == "whisper-gb"
+
+
+@pytest.mark.asyncio
+async def test_next_request_language_survives_preflight_resolution(hass) -> None:
+    """Preflight resolution must not consume the voice or its selected language."""
+    source = OverrideTTS()
+    entity = AdaptiveTTSEntity(make_entry())
+    attach(entity, hass, source)
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        await entity.async_set_voice_override("en-IE", "conor-ie", DURATION_NEXT_REQUEST)
+        policy = entity.default_options[CACHE_POLICY_OPTION]
+
+        preflight = entity.resolve_request("en-GB", {CACHE_POLICY_OPTION: policy})
+        assert preflight.language == "en-IE"
+        assert preflight.options["voice"] == "conor-ie"
+        assert entity.next_voice_override is not None
+
+        second_preflight = entity.resolve_request(
+            "en-GB", {CACHE_POLICY_OPTION: policy}
+        )
+        assert second_preflight.language == "en-IE"
+        assert second_preflight.options["voice"] == "conor-ie"
+        assert entity.next_voice_override is not None
+
+        await entity.async_get_tts_audio(
+            "Use Irish voice", "en-GB", {CACHE_POLICY_OPTION: policy}
+        )
+        assert source.calls[-1][1] == "en-IE"
+        assert source.calls[-1][2]["voice"] == "conor-ie"
+        assert entity.next_voice_override is None
 
 
 @pytest.mark.asyncio
@@ -141,6 +185,82 @@ async def test_persistent_override_survives_reload(hass, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_persistent_override_is_cleared(hass, tmp_path) -> None:
+    """A failed request clears a persistent override so later speech can recover."""
+    hass.config.config_dir = str(tmp_path)
+    entry = make_entry()
+    source = OverrideTTS()
+    entity = AdaptiveTTSEntity(entry)
+    attach(entity, hass, source)
+    await entity.async_load_voice_override(hass)
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        await entity.async_set_voice_override(
+            "en-GB", "cheerful-gb", DURATION_UNTIL_CHANGED
+        )
+        policy = entity.default_options[CACHE_POLICY_OPTION]
+        source.fail_generation = True
+
+        with pytest.raises(HomeAssistantError, match="provider rejected request"):
+            await entity.async_get_tts_audio(
+                "This fails", "en-US", {CACHE_POLICY_OPTION: policy}
+            )
+
+        assert entity.persistent_voice_override is None
+
+        source.fail_generation = False
+        resumed_policy = entity.default_options[CACHE_POLICY_OPTION]
+        _extension, data = await entity.async_get_tts_audio(
+            "This recovers", "en-US", {CACHE_POLICY_OPTION: resumed_policy}
+        )
+        assert data == b"whisper-gb"
+
+        reloaded = AdaptiveTTSEntity(entry)
+        attach(reloaded, hass, source)
+        await reloaded.async_load_voice_override(hass)
+        assert reloaded.persistent_voice_override is None
+
+
+@pytest.mark.asyncio
+async def test_invalid_persistent_override_is_cleared_during_resolution(
+    hass, tmp_path
+) -> None:
+    """A voice removed by the provider does not poison every later request."""
+    hass.config.config_dir = str(tmp_path)
+    entry = make_entry()
+    source = OverrideTTS()
+    entity = AdaptiveTTSEntity(entry)
+    attach(entity, hass, source)
+    await entity.async_load_voice_override(hass)
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        await entity.async_set_voice_override(
+            "en-GB", "cheerful-gb", DURATION_UNTIL_CHANGED
+        )
+        policy = entity.default_options[CACHE_POLICY_OPTION]
+        original_get_voices = source.async_get_supported_voices
+
+        def get_voices_without_override(language: str) -> list[Voice] | None:
+            voices = original_get_voices(language)
+            if language != "en-GB" or voices is None:
+                return voices
+            return [voice for voice in voices if voice.voice_id != "cheerful-gb"]
+
+        source.async_get_supported_voices = get_voices_without_override
+
+        with pytest.raises(HomeAssistantError, match="cheerful-gb"):
+            await entity.async_get_tts_audio(
+                "Removed voice", "en-US", {CACHE_POLICY_OPTION: policy}
+            )
+
+        assert entity.persistent_voice_override is None
+
+
+@pytest.mark.asyncio
 async def test_action_override_changes_cache_fingerprint(hass) -> None:
     """One-shot and persistent voice changes are represented in the cache key."""
     source = OverrideTTS()
@@ -158,7 +278,9 @@ async def test_action_override_changes_cache_fingerprint(hass) -> None:
         one_shot = entity.default_options[CACHE_POLICY_OPTION]
         assert one_shot != baseline
 
-        entity.resolve_request("en-US", {CACHE_POLICY_OPTION: one_shot})
+        await entity.async_get_tts_audio(
+            "Consume override", "en-US", {CACHE_POLICY_OPTION: one_shot}
+        )
         resumed = entity.default_options[CACHE_POLICY_OPTION]
         assert resumed == baseline
 
