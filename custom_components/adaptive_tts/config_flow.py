@@ -61,17 +61,14 @@ def _option_selector(options: list[str], default: str) -> selector.SelectSelecto
     )
 
 
-def _language_selector(provider, default: str | None = None) -> selector.SelectSelector:
+def _language_selector(provider) -> selector.SelectSelector:
     """Build a selector for the underlying provider's supported languages."""
-    languages = list(provider.supported_languages)
-    selected = default if default in languages else provider.default_language
-    options = [
-        selector.SelectOptionDict(value=language, label=language)
-        for language in languages
-    ]
     return selector.SelectSelector(
         selector.SelectSelectorConfig(
-            options=options,
+            options=[
+                selector.SelectOptionDict(value=language, label=language)
+                for language in provider.supported_languages
+            ],
             mode=selector.SelectSelectorMode.DROPDOWN,
         )
     )
@@ -367,7 +364,7 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
                             vol.Required(
                                 CONF_QUIET_LANGUAGE,
                                 default=current_language,
-                            ): _language_selector(provider, current_language)
+                            ): _language_selector(provider)
                         }
                     ),
                     errors={CONF_QUIET_LANGUAGE: "unsupported_language"},
@@ -380,7 +377,7 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_QUIET_LANGUAGE,
                     default=current_language,
-                ): _language_selector(provider, current_language)
+                ): _language_selector(provider)
             }
         )
         return self.async_show_form(step_id="language", data_schema=schema)
