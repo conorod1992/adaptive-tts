@@ -30,8 +30,8 @@ from .const import (
 _SET_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+        vol.Required(ATTR_LANGUAGE): cv.string,
         vol.Required(ATTR_VOICE): cv.string,
-        vol.Optional(ATTR_LANGUAGE): cv.string,
         vol.Optional(ATTR_DURATION, default=DURATION_NEXT_REQUEST): vol.In(
             (DURATION_NEXT_REQUEST, DURATION_UNTIL_CHANGED)
         ),
@@ -90,7 +90,7 @@ def async_register_services(hass: HomeAssistant) -> None:
 
     async def _set_voice_override(call: ServiceCall) -> None:
         entities = _resolve_entities(hass, call.data[ATTR_ENTITY_ID])
-        language = call.data.get(ATTR_LANGUAGE)
+        language = call.data[ATTR_LANGUAGE]
         voice = call.data[ATTR_VOICE]
         duration = call.data[ATTR_DURATION]
         for entity in entities:
