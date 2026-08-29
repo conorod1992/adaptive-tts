@@ -29,11 +29,19 @@ async def async_get_config_entry_diagnostics(
     config = entry_config(entry)
     entity_id = config[CONF_UNDERLYING_TTS_ENTITY]
     underlying = get_tts_entity(hass, entity_id)
-    adaptive_entity = hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {}).get(entry.entry_id)
-    persistent = (
-        adaptive_entity.persistent_voice_override if adaptive_entity is not None else None
+    adaptive_entity = (
+        hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {}).get(entry.entry_id)
     )
-    pending = adaptive_entity.next_voice_override if adaptive_entity is not None else None
+    persistent = (
+        adaptive_entity.persistent_voice_override
+        if adaptive_entity is not None
+        else None
+    )
+    pending = (
+        adaptive_entity.next_voice_override
+        if adaptive_entity is not None
+        else None
+    )
     return {
         "adaptive_tts_version": VERSION,
         "underlying_tts_entity_id": entity_id,
