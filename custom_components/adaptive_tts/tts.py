@@ -64,6 +64,7 @@ class ResolvedRequest:
     language: str
     options: dict[str, Any]
     quiet_mode_active: bool
+    voice_override: VoiceOverride | None = None
 
 
 async def async_setup_entry(
@@ -298,14 +299,63 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(f"Unsupported voice override scope: {scope}")
 
     def _override_from_cache_marker(self, marker: str) -> VoiceOverride | None:
-        """Claim a one-shot override or return the persistent override."""
+        """Return the override represented by a cache marker without consuming it."""
         if marker.startswith("next:"):
             token = marker.partition(":")[2]
             pending = self._next_voice_override
             if pending is not None and pending.token == token:
-                self._next_voice_override = None
                 return pending
-        return self._persistent_voice_override
+            return None
+        if marker in ("none", "persistent"):
+            return self._persistent_voice_override
+        return None
+
+    def _override_for_options(
+        self, options: Mapping[str, Any] | None
+    ) -> VoiceOverride | None:
+        """Return the explicit override associated with manager-processed options."""
+        policy_cache_value = (options or {}).get(CACHE_POLICY_OPTION)
+        marker = "none"
+        if isinstance(policy_cache_value, str) and "|" in policy_cache_value:
+            _state, marker, _digest = policy_cache_value.split("|", 2)
+        return self._override_from_cache_marker(marker)
+
+    def _consume_next_voice_override(self, override: VoiceOverride | None) -> None:
+        """Consume a matching one-shot override when synthesis actually starts."""
+        if override is None or override.token is None:
+            return
+        pending = self._next_voice_override
+        if pending is not None and pending.token == override.token:
+            self._next_voice_override = None
+
+    async def _async_clear_failed_voice_override(
+        self, override: VoiceOverride | None
+    ) -> None:
+        """Clear an explicit override after a request using it fails."""
+        if override is None:
+            return
+        if override.token is not None:
+            self._consume_next_voice_override(override)
+            return
+
+        persistent = self._persistent_voice_override
+        if persistent != override:
+            return
+        self._persistent_voice_override = None
+        if self._override_store is not None:
+            try:
+                await self._override_store.async_remove()
+            except Exception as err:
+                _LOGGER.error(
+                    "Failed to remove invalid persistent voice override "
+                    "from storage: %s",
+                    err,
+                )
+        _LOGGER.warning(
+            "Cleared persistent voice override %s for %s after TTS generation failed",
+            override.voice,
+            self.underlying_entity_id,
+        )
 
     @callback
     def resolve_request(
@@ -419,16 +469,33 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             language=effective_language,
             options=effective_options,
             quiet_mode_active=quiet_active,
+            voice_override=explicit_override,
         )
+
+    async def _async_resolve_for_synthesis(
+        self,
+        language: str | None,
+        options: Mapping[str, Any] | None,
+    ) -> ResolvedRequest:
+        """Resolve a synthesis request and clear a failing explicit override."""
+        request_override = self._override_for_options(options)
+        try:
+            resolved = self.resolve_request(language, options)
+        except Exception:
+            await self._async_clear_failed_voice_override(request_override)
+            raise
+        self._consume_next_voice_override(resolved.voice_override)
+        return resolved
 
     @override
     async def async_get_tts_audio(
         self, message: str, language: str, options: dict[str, Any]
     ) -> TtsAudioType:
         """Generate one-shot audio through the underlying entity."""
-        resolved = self.resolve_request(language, options)
+        resolved = await self._async_resolve_for_synthesis(language, options)
         underlying = self._underlying
         if underlying is None:
+            await self._async_clear_failed_voice_override(resolved.voice_override)
             raise HomeAssistantError(
                 f"Underlying TTS entity {self.underlying_entity_id} disappeared"
             )
@@ -437,8 +504,10 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 message, resolved.language, resolved.options
             )
         except HomeAssistantError:
+            await self._async_clear_failed_voice_override(resolved.voice_override)
             raise
         except Exception as err:
+            await self._async_clear_failed_voice_override(resolved.voice_override)
             _LOGGER.error(
                 "Underlying TTS generation failed for %s: %s",
                 self.underlying_entity_id,
@@ -453,22 +522,27 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         self, request: TTSAudioRequest
     ) -> TTSAudioResponse:
         """Forward streaming input when supported, otherwise safely collect it."""
-        resolved = self.resolve_request(request.language, request.options)
+        resolved = await self._async_resolve_for_synthesis(
+            request.language, request.options
+        )
         underlying = self._underlying
         if underlying is None:
+            await self._async_clear_failed_voice_override(resolved.voice_override)
             raise HomeAssistantError(
                 f"Underlying TTS entity {self.underlying_entity_id} disappeared"
             )
         if underlying.async_supports_streaming_input():
             try:
-                return await underlying.async_stream_tts_audio(
+                response = await underlying.async_stream_tts_audio(
                     TTSAudioRequest(
                         resolved.language, resolved.options, request.message_gen
                     )
                 )
             except HomeAssistantError:
+                await self._async_clear_failed_voice_override(resolved.voice_override)
                 raise
             except Exception as err:
+                await self._async_clear_failed_voice_override(resolved.voice_override)
                 _LOGGER.error(
                     "Underlying streaming TTS generation failed for %s: %s",
                     self.underlying_entity_id,
@@ -479,14 +553,28 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                     f"{self.underlying_entity_id}: {err}"
                 ) from err
 
-        message = "".join([chunk async for chunk in request.message_gen])
+            async def guarded_data_gen():
+                try:
+                    async for chunk in response.data_gen:
+                        yield chunk
+                except Exception:
+                    await self._async_clear_failed_voice_override(
+                        resolved.voice_override
+                    )
+                    raise
+
+            return TTSAudioResponse(response.extension, guarded_data_gen())
+
         try:
+            message = "".join([chunk async for chunk in request.message_gen])
             extension, data = await underlying.async_get_tts_audio(
                 message, resolved.language, resolved.options
             )
         except HomeAssistantError:
+            await self._async_clear_failed_voice_override(resolved.voice_override)
             raise
         except Exception as err:
+            await self._async_clear_failed_voice_override(resolved.voice_override)
             _LOGGER.error(
                 "Underlying TTS generation failed for %s: %s",
                 self.underlying_entity_id,
@@ -496,6 +584,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 f"TTS generation failed in {self.underlying_entity_id}: {err}"
             ) from err
         if extension is None or data is None:
+            await self._async_clear_failed_voice_override(resolved.voice_override)
             raise HomeAssistantError(
                 f"No TTS audio returned by {self.underlying_entity_id}"
             )
