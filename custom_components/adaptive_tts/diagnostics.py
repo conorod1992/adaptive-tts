@@ -38,9 +38,7 @@ async def async_get_config_entry_diagnostics(
         else None
     )
     pending = (
-        adaptive_entity.next_voice_override
-        if adaptive_entity is not None
-        else None
+        adaptive_entity.next_voice_override if adaptive_entity is not None else None
     )
     return {
         "adaptive_tts_version": VERSION,
