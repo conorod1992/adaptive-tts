@@ -347,7 +347,8 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 await self._override_store.async_remove()
             except Exception as err:  # noqa: BLE001
                 _LOGGER.error(
-                    "Failed to remove invalid persistent voice override from storage: %s",
+                    "Failed to remove invalid persistent voice override "
+                    "from storage: %s",
                     err,
                 )
         _LOGGER.warning(
