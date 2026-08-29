@@ -104,9 +104,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         if stored and stored.get("voice"):
             self._persistent_voice_override = VoiceOverride(
                 voice=str(stored["voice"]),
-                language=(
-                    str(stored["language"]) if stored.get("language") else None
-                ),
+                language=(str(stored["language"]) if stored.get("language") else None),
             )
 
     @property
