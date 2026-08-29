@@ -73,6 +73,13 @@ integration entry and choose **Configure**.
 If the start and end times are identical, quiet mode is active all day. The
 start is inclusive and the end is exclusive.
 
+When the override is `voice`, the configuration UI shows the provider's voices
+for its default language when they can be enumerated and stores the selected
+voice ID. The selector also accepts a custom ID for another language. Providers
+that do not enumerate voices, and non-voice options such as `style` or
+`emotion`, use a text field instead. At synthesis time Adaptive TTS validates
+an enumerated voice against the request's actual language.
+
 ## Using Adaptive TTS in Assist
 
 After setup, edit an Assist pipeline and select the new entity, usually named
@@ -121,6 +128,15 @@ At runtime, a configured quiet option is checked against the provider's current
 or voice disappears, synthesis fails with a useful Home Assistant error rather
 than silently sending a stale override. Providers that do not enumerate valid
 values for a non-voice option can only be validated by the provider itself.
+
+Home Assistant forms its normal non-streaming cache identity before invoking a
+TTS entity. Adaptive TTS contributes a private policy fingerprint through its
+public default-options metadata so normal and quiet results—and results after a
+policy configuration change—use different cache entries. The fingerprint is
+removed before delegation and is never sent to the underlying provider.
+The effective policy is sampled when Home Assistant creates the TTS result
+stream, keeping the cache identity and the subsequently generated voice aligned
+even if a configured time boundary passes before the stream is consumed.
 
 ## Architecture and Home Assistant APIs
 

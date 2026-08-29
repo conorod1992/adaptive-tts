@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CACHE_POLICY_OPTION,
     CONF_QUIET_END,
     CONF_QUIET_MODE,
     CONF_QUIET_OPTION,
@@ -98,15 +100,13 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
     @override
     def default_language(self) -> str:
         """Expose the underlying entity's default language."""
-        return self._underlying.default_language if self._underlying else "en"
+        return self._underlying.default_language if self._underlying else ""
 
     @property
     @override
     def supported_languages(self) -> list[str]:
         """Expose the underlying entity's supported languages."""
-        return (
-            list(self._underlying.supported_languages) if self._underlying else ["en"]
-        )
+        return list(self._underlying.supported_languages) if self._underlying else []
 
     @property
     @override
@@ -121,12 +121,31 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
     @property
     @override
     def default_options(self) -> Mapping[str, Any] | None:
-        """Expose the underlying entity's default options."""
-        return (
-            dict(self._underlying.default_options)
-            if self._underlying and self._underlying.default_options is not None
-            else None
+        """Expose provider defaults plus a wrapper-only cache discriminator."""
+        options = (
+            dict(self._underlying.default_options or {}) if self._underlying else {}
         )
+        options[CACHE_POLICY_OPTION] = self._policy_cache_value()
+        return options
+
+    def _policy_cache_value(self) -> str:
+        """Return a stable fingerprint of configuration and current policy state."""
+        config = self._config
+        quiet_active = self.is_quiet_mode_active()
+        policy = "\0".join(
+            str(value)
+            for value in (
+                config[CONF_UNDERLYING_TTS_ENTITY],
+                config[CONF_QUIET_MODE],
+                config[CONF_QUIET_START],
+                config[CONF_QUIET_END],
+                config[CONF_QUIET_OPTION],
+                config[CONF_QUIET_VALUE],
+                quiet_active,
+            )
+        )
+        state = "quiet" if quiet_active else "normal"
+        return f"{state}:{hashlib.blake2s(policy.encode(), digest_size=8).hexdigest()}"
 
     @callback
     @override
@@ -194,9 +213,15 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 f"{self.underlying_entity_id}"
             )
 
+        incoming_options = dict(options or {})
+        policy_cache_value = incoming_options.pop(CACHE_POLICY_OPTION, None)
         effective_options = dict(underlying.default_options or {})
-        effective_options.update(options or {})
-        quiet_active = self.is_quiet_mode_active(now)
+        effective_options.update(incoming_options)
+        quiet_active = (
+            policy_cache_value.startswith("quiet:")
+            if isinstance(policy_cache_value, str)
+            else self.is_quiet_mode_active(now)
+        )
         if quiet_active:
             config = self._config
             option_name = config[CONF_QUIET_OPTION]
@@ -249,6 +274,8 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             return await underlying.async_get_tts_audio(
                 message, resolved.language, resolved.options
             )
+        except HomeAssistantError:
+            raise
         except Exception as err:
             _LOGGER.error(
                 "Underlying TTS generation failed for %s: %s",
@@ -277,6 +304,8 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                         resolved.language, resolved.options, request.message_gen
                     )
                 )
+            except HomeAssistantError:
+                raise
             except Exception as err:
                 _LOGGER.error(
                     "Underlying streaming TTS generation failed for %s: %s",
@@ -289,9 +318,21 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 ) from err
 
         message = "".join([chunk async for chunk in request.message_gen])
-        extension, data = await underlying.async_get_tts_audio(
-            message, resolved.language, resolved.options
-        )
+        try:
+            extension, data = await underlying.async_get_tts_audio(
+                message, resolved.language, resolved.options
+            )
+        except HomeAssistantError:
+            raise
+        except Exception as err:
+            _LOGGER.error(
+                "Underlying TTS generation failed for %s: %s",
+                self.underlying_entity_id,
+                err,
+            )
+            raise HomeAssistantError(
+                f"TTS generation failed in {self.underlying_entity_id}: {err}"
+            ) from err
         if extension is None or data is None:
             raise HomeAssistantError(
                 f"No TTS audio returned by {self.underlying_entity_id}"

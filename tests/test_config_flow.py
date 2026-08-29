@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant import config_entries, data_entry_flow
 from homeassistant.const import CONF_NAME
+from homeassistant.helpers import selector
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.adaptive_tts.config_flow import _override_selector
 from custom_components.adaptive_tts.const import (
     CONF_QUIET_END,
     CONF_QUIET_MODE,
@@ -18,6 +20,25 @@ from custom_components.adaptive_tts.const import (
 )
 
 from .test_tts import MockTTS
+
+
+def test_voice_override_uses_enumerated_selector() -> None:
+    """Enumerable voices are presented by name and stored by ID."""
+    voice_selector = _override_selector(MockTTS(), "voice")
+    assert isinstance(voice_selector, selector.SelectSelector)
+    assert voice_selector.config["options"] == [
+        {"value": "normal", "label": "Normal"},
+        {"value": "whisper", "label": "Whisper"},
+    ]
+    assert voice_selector.config["custom_value"] is True
+
+
+def test_override_falls_back_to_text_without_enumerated_voices() -> None:
+    """Non-enumerable voices and non-voice options remain free text."""
+    source = MockTTS()
+    source.async_get_supported_voices = lambda language: None
+    assert isinstance(_override_selector(source, "voice"), selector.TextSelector)
+    assert isinstance(_override_selector(MockTTS(), "style"), selector.TextSelector)
 
 
 @pytest.mark.asyncio
@@ -63,11 +84,11 @@ async def test_config_flow_succeeds(hass) -> None:
         )
         assert result["step_id"] == "override"
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONF_QUIET_VALUE: "whisper"}
+            result["flow_id"], {CONF_QUIET_VALUE: "en-gb-only-voice"}
         )
     assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
     assert result["title"] == "Bedroom TTS"
-    assert result["data"][CONF_QUIET_VALUE] == "whisper"
+    assert result["data"][CONF_QUIET_VALUE] == "en-gb-only-voice"
 
 
 @pytest.mark.asyncio
