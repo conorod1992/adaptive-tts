@@ -265,8 +265,14 @@ async def test_manager_cache_separates_normal_and_quiet_policy(hass, tmp_path) -
 
     with (
         patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
-        patch("custom_components.adaptive_tts.tts.dt_util.now", side_effect=lambda: now[0]),
-        patch("homeassistant.components.tts.get_engine_instance", side_effect=engine_for_id),
+        patch(
+            "custom_components.adaptive_tts.tts.dt_util.now",
+            side_effect=lambda: now[0],
+        ),
+        patch(
+            "homeassistant.components.tts.get_engine_instance",
+            side_effect=engine_for_id,
+        ),
         patch.object(entity, "async_internal_get_tts_audio", side_effect=internal_get),
     ):
         normal = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
@@ -302,10 +308,15 @@ def test_policy_configuration_change_updates_cache_fingerprint(hass) -> None:
     attach(entity, hass, source)
     with (
         patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
-        patch("custom_components.adaptive_tts.tts.dt_util.now", return_value=datetime(2026, 8, 29, 1, 0)),
+        patch(
+            "custom_components.adaptive_tts.tts.dt_util.now",
+            return_value=datetime(2026, 8, 29, 1, 0),
+        ),
     ):
         before = entity.default_options[CACHE_POLICY_OPTION]
-        hass.config_entries.async_update_entry(entry, options={CONF_QUIET_VALUE: "softer-whisper"})
+        hass.config_entries.async_update_entry(
+            entry, options={CONF_QUIET_VALUE: "softer-whisper"}
+        )
         after = entity.default_options[CACHE_POLICY_OPTION]
     assert before != after
 
@@ -320,7 +331,9 @@ async def test_cache_fingerprint_does_not_leak_through_stream_fallback(hass) -> 
     async def message_gen():
         yield "hello"
 
-    with patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source):
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
         response = await entity.async_stream_tts_audio(
             TTSAudioRequest(
                 "en-US",
