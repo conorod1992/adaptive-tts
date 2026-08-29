@@ -20,9 +20,16 @@
           "quiet_option": "Voice/style option to override"
         }
       },
+      "language": {
+        "title": "Choose quiet voice language",
+        "description": "Choose the language/accent family to use during quiet hours. The next step will show voices available for this language. This can differ from the Assist pipeline language.",
+        "data": {
+          "quiet_language": "Quiet voice language"
+        }
+      },
       "override": {
         "title": "Configure the quiet override",
-        "description": "Choose a listed voice when available, or enter the provider's exact voice/style value. Voice availability can vary by request language.",
+        "description": "Choose a listed voice when available, or enter the provider's exact voice/style value.",
         "data": {
           "quiet_value": "Quiet voice/style value"
         }
@@ -32,6 +39,7 @@
       "provider_not_found": "The selected TTS entity is not currently available.",
       "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
       "unsupported_option": "The selected option is not supported by this provider.",
+      "unsupported_language": "The selected language is not supported by this provider.",
       "override_required": "Enter a quiet voice/style value."
     },
     "abort": {
@@ -56,9 +64,16 @@
           "quiet_option": "Voice/style option to override"
         }
       },
+      "language": {
+        "title": "Choose quiet voice language",
+        "description": "Choose the language/accent family to use during quiet hours. The next step will show voices available for this language. This can differ from the Assist pipeline language.",
+        "data": {
+          "quiet_language": "Quiet voice language"
+        }
+      },
       "override": {
         "title": "Update the quiet override",
-        "description": "Choose a listed voice when available, or enter the provider's exact voice/style value. Voice availability can vary by request language.",
+        "description": "Choose a listed voice when available, or enter the provider's exact voice/style value.",
         "data": {
           "quiet_value": "Quiet voice/style value"
         }
@@ -68,6 +83,7 @@
       "provider_not_found": "The selected TTS entity is not currently available.",
       "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
       "unsupported_option": "The selected option is not supported by this provider.",
+      "unsupported_language": "The selected language is not supported by this provider.",
       "override_required": "Enter a quiet voice/style value."
     },
     "abort": {

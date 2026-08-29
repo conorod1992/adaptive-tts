@@ -25,6 +25,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CACHE_POLICY_OPTION,
     CONF_QUIET_END,
+    CONF_QUIET_LANGUAGE,
     CONF_QUIET_MODE,
     CONF_QUIET_OPTION,
     CONF_QUIET_START,
@@ -140,6 +141,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 config[CONF_QUIET_START],
                 config[CONF_QUIET_END],
                 config[CONF_QUIET_OPTION],
+                config.get(CONF_QUIET_LANGUAGE, ""),
                 config[CONF_QUIET_VALUE],
                 quiet_active,
             )
@@ -201,7 +203,19 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 f"Underlying TTS entity {self.underlying_entity_id} is unavailable"
             )
 
+        incoming_options = dict(options or {})
+        policy_cache_value = incoming_options.pop(CACHE_POLICY_OPTION, None)
+        quiet_active = (
+            policy_cache_value.startswith("quiet:")
+            if isinstance(policy_cache_value, str)
+            else self.is_quiet_mode_active(now)
+        )
+        config = self._config
+
         effective_language = language or underlying.default_language
+        if quiet_active and config[CONF_QUIET_OPTION] == "voice":
+            effective_language = config.get(CONF_QUIET_LANGUAGE) or effective_language
+
         if effective_language not in underlying.supported_languages:
             _LOGGER.error(
                 "Underlying TTS entity %s does not support language %s",
@@ -213,17 +227,9 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 f"{self.underlying_entity_id}"
             )
 
-        incoming_options = dict(options or {})
-        policy_cache_value = incoming_options.pop(CACHE_POLICY_OPTION, None)
         effective_options = dict(underlying.default_options or {})
         effective_options.update(incoming_options)
-        quiet_active = (
-            policy_cache_value.startswith("quiet:")
-            if isinstance(policy_cache_value, str)
-            else self.is_quiet_mode_active(now)
-        )
         if quiet_active:
-            config = self._config
             option_name = config[CONF_QUIET_OPTION]
             option_value = config[CONF_QUIET_VALUE]
             supported_options = underlying.supported_options or []
@@ -266,7 +272,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         """Generate one-shot audio through the underlying entity."""
         resolved = self.resolve_request(language, options)
         underlying = self._underlying
-        if underlying is None:  # Guard against removal between resolution and call.
+        if underlying is None:
             raise HomeAssistantError(
                 f"Underlying TTS entity {self.underlying_entity_id} disappeared"
             )

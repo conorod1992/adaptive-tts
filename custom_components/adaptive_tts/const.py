@@ -4,13 +4,14 @@ from typing import Final
 
 DOMAIN: Final = "adaptive_tts"
 NAME: Final = "Adaptive TTS"
-VERSION: Final = "0.1.1"
+VERSION: Final = "0.1.2"
 
 CONF_UNDERLYING_TTS_ENTITY: Final = "underlying_tts_entity"
 CONF_QUIET_MODE: Final = "quiet_mode"
 CONF_QUIET_START: Final = "quiet_start"
 CONF_QUIET_END: Final = "quiet_end"
 CONF_QUIET_OPTION: Final = "quiet_option"
+CONF_QUIET_LANGUAGE: Final = "quiet_language"
 CONF_QUIET_VALUE: Final = "quiet_value"
 
 # Included in the wrapper's processed options so Home Assistant's normal TTS

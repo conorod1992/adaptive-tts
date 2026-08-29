@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_QUIET_END,
+    CONF_QUIET_LANGUAGE,
     CONF_QUIET_MODE,
     CONF_QUIET_OPTION,
     CONF_QUIET_START,
@@ -42,6 +43,7 @@ async def async_get_config_entry_diagnostics(
             "start": str(config[CONF_QUIET_START]),
             "end": str(config[CONF_QUIET_END]),
             "override_option": config[CONF_QUIET_OPTION],
+            "override_language": config.get(CONF_QUIET_LANGUAGE),
             "override_value": config[CONF_QUIET_VALUE],
         },
     }

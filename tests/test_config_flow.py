@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant import config_entries, data_entry_flow
+from homeassistant.components.tts import Voice
 from homeassistant.const import CONF_NAME
 from homeassistant.helpers import selector
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -11,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.adaptive_tts.config_flow import _override_selector
 from custom_components.adaptive_tts.const import (
     CONF_QUIET_END,
+    CONF_QUIET_LANGUAGE,
     CONF_QUIET_MODE,
     CONF_QUIET_OPTION,
     CONF_QUIET_START,
@@ -22,13 +24,18 @@ from custom_components.adaptive_tts.const import (
 from .test_tts import MockTTS
 
 
-def test_voice_override_uses_enumerated_selector() -> None:
-    """Enumerable voices are presented by name and stored by ID."""
-    voice_selector = _override_selector(MockTTS(), "voice")
+def test_voice_override_uses_selected_language() -> None:
+    """Enumerable voices come from the explicitly selected quiet language."""
+    source = MockTTS()
+    source.async_get_supported_voices = lambda language: (
+        [Voice("british", "British Whisper")]
+        if language == "en-GB"
+        else [Voice("american", "American Whisper")]
+    )
+    voice_selector = _override_selector(source, "voice", "en-GB")
     assert isinstance(voice_selector, selector.SelectSelector)
     assert voice_selector.config["options"] == [
-        {"value": "normal", "label": "Normal"},
-        {"value": "whisper", "label": "Whisper"},
+        {"value": "british", "label": "British Whisper"}
     ]
     assert voice_selector.config["custom_value"] is True
 
@@ -37,15 +44,22 @@ def test_override_falls_back_to_text_without_enumerated_voices() -> None:
     """Non-enumerable voices and non-voice options remain free text."""
     source = MockTTS()
     source.async_get_supported_voices = lambda language: None
-    assert isinstance(_override_selector(source, "voice"), selector.TextSelector)
+    assert isinstance(
+        _override_selector(source, "voice", "en-GB"), selector.TextSelector
+    )
     assert isinstance(_override_selector(MockTTS(), "style"), selector.TextSelector)
 
 
 @pytest.mark.asyncio
 async def test_config_flow_succeeds(hass) -> None:
-    """The UI flow creates a config entry."""
+    """The UI flow selects quiet language before quiet voice."""
     source = MockTTS()
     source.hass = hass
+    source.async_get_supported_voices = lambda language: (
+        [Voice("british", "British Whisper")]
+        if language == "en-GB"
+        else [Voice("normal", "Normal")]
+    )
     hass.states.async_set("tts.source", "unknown")
     with (
         patch(
@@ -82,13 +96,18 @@ async def test_config_flow_succeeds(hass) -> None:
                 CONF_QUIET_OPTION: "voice",
             },
         )
+        assert result["step_id"] == "language"
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_QUIET_LANGUAGE: "en-GB"}
+        )
         assert result["step_id"] == "override"
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONF_QUIET_VALUE: "en-gb-only-voice"}
+            result["flow_id"], {CONF_QUIET_VALUE: "british"}
         )
     assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
     assert result["title"] == "Bedroom TTS"
-    assert result["data"][CONF_QUIET_VALUE] == "en-gb-only-voice"
+    assert result["data"][CONF_QUIET_LANGUAGE] == "en-GB"
+    assert result["data"][CONF_QUIET_VALUE] == "british"
 
 
 @pytest.mark.asyncio
@@ -132,6 +151,7 @@ async def test_options_flow_updates_provider_and_policy(hass) -> None:
             CONF_QUIET_START: "23:00:00",
             CONF_QUIET_END: "07:00:00",
             CONF_QUIET_OPTION: "voice",
+            CONF_QUIET_LANGUAGE: "en-GB",
             CONF_QUIET_VALUE: "whisper",
         },
     )
@@ -173,3 +193,4 @@ async def test_options_flow_updates_provider_and_policy(hass) -> None:
     assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_UNDERLYING_TTS_ENTITY] == "tts.new"
     assert result["data"][CONF_QUIET_MODE] is False
+    assert CONF_QUIET_LANGUAGE not in result["data"]
