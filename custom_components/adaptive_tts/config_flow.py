@@ -12,6 +12,7 @@ from homeassistant.helpers import selector
 
 from .const import (
     CONF_QUIET_END,
+    CONF_QUIET_LANGUAGE,
     CONF_QUIET_MODE,
     CONF_QUIET_OPTION,
     CONF_QUIET_START,
@@ -60,12 +61,30 @@ def _option_selector(options: list[str], default: str) -> selector.SelectSelecto
     )
 
 
+def _language_selector(provider, default: str | None = None) -> selector.SelectSelector:
+    """Build a selector for the underlying provider's supported languages."""
+    languages = list(provider.supported_languages)
+    selected = default if default in languages else provider.default_language
+    options = [
+        selector.SelectOptionDict(value=language, label=language)
+        for language in languages
+    ]
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=options,
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
+
+
 def _override_selector(
-    provider, option: str
+    provider, option: str, language: str | None = None
 ) -> selector.SelectSelector | selector.TextSelector:
     """Build a voice dropdown when enumeration is available, else text input."""
     if option == "voice":
-        voices = provider.async_get_supported_voices(provider.default_language) or []
+        voices = provider.async_get_supported_voices(
+            language or provider.default_language
+        ) or []
         if voices:
             return selector.SelectSelector(
                 selector.SelectSelectorConfig(
@@ -144,7 +163,11 @@ class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._pending.update(user_input)
                 if not user_input[CONF_QUIET_MODE]:
                     self._pending[CONF_QUIET_VALUE] = ""
+                    self._pending.pop(CONF_QUIET_LANGUAGE, None)
                     return self._create_entry()
+                if user_input[CONF_QUIET_OPTION] == "voice":
+                    return await self.async_step_language()
+                self._pending.pop(CONF_QUIET_LANGUAGE, None)
                 return await self.async_step_override()
 
         schema = vol.Schema(
@@ -162,6 +185,41 @@ class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="policy", data_schema=schema, errors=errors)
+
+    async def async_step_language(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the language/accent family before choosing a quiet voice."""
+        provider = get_tts_entity(self.hass, self._pending[CONF_UNDERLYING_TTS_ENTITY])
+        if provider is None:
+            return self.async_abort(reason="provider_not_found")
+        if user_input is not None:
+            language = user_input[CONF_QUIET_LANGUAGE]
+            if language not in provider.supported_languages:
+                return self.async_show_form(
+                    step_id="language",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(
+                                CONF_QUIET_LANGUAGE,
+                                default=provider.default_language,
+                            ): _language_selector(provider)
+                        }
+                    ),
+                    errors={CONF_QUIET_LANGUAGE: "unsupported_language"},
+                )
+            self._pending[CONF_QUIET_LANGUAGE] = language
+            return await self.async_step_override()
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_QUIET_LANGUAGE,
+                    default=provider.default_language,
+                ): _language_selector(provider)
+            }
+        )
+        return self.async_show_form(step_id="language", data_schema=schema)
 
     async def async_step_override(
         self, user_input: dict[str, Any] | None = None
@@ -182,7 +240,9 @@ class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
         schema = vol.Schema(
             {
                 vol.Required(CONF_QUIET_VALUE): _override_selector(
-                    provider, self._pending[CONF_QUIET_OPTION]
+                    provider,
+                    self._pending[CONF_QUIET_OPTION],
+                    self._pending.get(CONF_QUIET_LANGUAGE),
                 )
             }
         )
@@ -256,7 +316,11 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
                 self._pending.update(user_input)
                 if not user_input[CONF_QUIET_MODE]:
                     self._pending[CONF_QUIET_VALUE] = ""
+                    self._pending.pop(CONF_QUIET_LANGUAGE, None)
                     return self.async_create_entry(title="", data=self._pending)
+                if user_input[CONF_QUIET_OPTION] == "voice":
+                    return await self.async_step_language()
+                self._pending.pop(CONF_QUIET_LANGUAGE, None)
                 return await self.async_step_override()
 
         schema = vol.Schema(
@@ -279,6 +343,47 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
             }
         )
         return self.async_show_form(step_id="policy", data_schema=schema, errors=errors)
+
+    async def async_step_language(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose the quiet synthesis language before choosing the voice."""
+        provider = get_tts_entity(self.hass, self._pending[CONF_UNDERLYING_TTS_ENTITY])
+        if provider is None:
+            return self.async_abort(reason="provider_not_found")
+        current_language = self._config.get(
+            CONF_QUIET_LANGUAGE, provider.default_language
+        )
+        if current_language not in provider.supported_languages:
+            current_language = provider.default_language
+
+        if user_input is not None:
+            language = user_input[CONF_QUIET_LANGUAGE]
+            if language not in provider.supported_languages:
+                return self.async_show_form(
+                    step_id="language",
+                    data_schema=vol.Schema(
+                        {
+                            vol.Required(
+                                CONF_QUIET_LANGUAGE,
+                                default=current_language,
+                            ): _language_selector(provider, current_language)
+                        }
+                    ),
+                    errors={CONF_QUIET_LANGUAGE: "unsupported_language"},
+                )
+            self._pending[CONF_QUIET_LANGUAGE] = language
+            return await self.async_step_override()
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_QUIET_LANGUAGE,
+                    default=current_language,
+                ): _language_selector(provider, current_language)
+            }
+        )
+        return self.async_show_form(step_id="language", data_schema=schema)
 
     async def async_step_override(
         self, user_input: dict[str, Any] | None = None
@@ -304,6 +409,7 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
                 ): _override_selector(
                     provider,
                     self._pending[CONF_QUIET_OPTION],
+                    self._pending.get(CONF_QUIET_LANGUAGE),
                 )
             }
         )
