@@ -1,0 +1,4 @@
+ha-ffmpeg>=3.2.0
+mutagen>=1.47.0
+pytest-homeassistant-custom-component==0.13.351
+ruff==0.16.1
