@@ -4,7 +4,7 @@ from typing import Final
 
 DOMAIN: Final = "adaptive_tts"
 NAME: Final = "Adaptive TTS"
-VERSION: Final = "0.1.2"
+VERSION: Final = "0.2.0"
 
 CONF_UNDERLYING_TTS_ENTITY: Final = "underlying_tts_entity"
 CONF_QUIET_MODE: Final = "quiet_mode"
@@ -25,6 +25,19 @@ DEFAULT_QUIET_OPTION: Final = "voice"
 
 DATA_ENTITIES: Final = "entities"
 DATA_FRONTEND_REGISTERED: Final = "frontend_registered"
+DATA_SERVICES_REGISTERED: Final = "services_registered"
+
+SERVICE_SET_VOICE_OVERRIDE: Final = "set_voice_override"
+SERVICE_CLEAR_VOICE_OVERRIDE: Final = "clear_voice_override"
+ATTR_VOICE: Final = "voice"
+ATTR_LANGUAGE: Final = "language"
+ATTR_DURATION: Final = "duration"
+ATTR_SCOPE: Final = "scope"
+DURATION_NEXT_REQUEST: Final = "next_request"
+DURATION_UNTIL_CHANGED: Final = "until_changed"
+SCOPE_ALL: Final = "all"
+SCOPE_NEXT_REQUEST: Final = "next_request"
+SCOPE_PERSISTENT: Final = "persistent"
 
 PANEL_URL_PATH: Final = "adaptive-tts"
 STATIC_URL_PATH: Final = "/adaptive_tts_static"
