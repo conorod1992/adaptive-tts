@@ -122,7 +122,9 @@ async def test_next_request_language_survives_preflight_resolution(hass) -> None
     with patch(
         "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
     ):
-        await entity.async_set_voice_override("en-IE", "conor-ie", DURATION_NEXT_REQUEST)
+        await entity.async_set_voice_override(
+            "en-IE", "conor-ie", DURATION_NEXT_REQUEST
+        )
         policy = entity.default_options[CACHE_POLICY_OPTION]
 
         preflight = entity.resolve_request("en-GB", {CACHE_POLICY_OPTION: policy})
