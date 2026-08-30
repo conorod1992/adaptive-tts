@@ -316,6 +316,74 @@ async def test_manager_cache_separates_normal_and_quiet_policy(hass, tmp_path) -
     assert normal.options != quiet.options
 
 
+@pytest.mark.asyncio
+async def test_quiet_fallback_does_not_poison_recovered_policy_cache(
+    hass, tmp_path
+) -> None:
+    """Fallback audio cannot be reused once the quiet policy recovers."""
+    hass.config.config_dir = str(tmp_path)
+    assert await async_setup_component(hass, "tts", {"tts": [{"cache": False}]})
+    hass.data[ha_tts.DATA_TTS_MANAGER].use_file_cache = False
+    source = MockTTS()
+    quiet_voice_available = [False]
+
+    def supported_voices(_language):
+        voices = [Voice("normal", "Normal")]
+        if quiet_voice_available[0]:
+            voices.append(Voice("whisper", "Whisper"))
+        return voices
+
+    async def audio_for_voice(message, language, options):
+        source.calls.append((message, language, dict(options)))
+        return "mp3", options["voice"].encode()
+
+    source.async_get_supported_voices = supported_voices
+    source.async_get_tts_audio = audio_for_voice
+    entity = AdaptiveTTSEntity(make_entry(quiet=True))
+    attach(entity, hass, source)
+
+    async def internal_stream(request):
+        return await entity.async_stream_tts_audio(request)
+
+    def engine_for_id(_hass, engine_id):
+        return entity if engine_id == "tts.adaptive" else source
+
+    with (
+        patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
+        patch(
+            "homeassistant.components.tts.get_engine_instance",
+            side_effect=engine_for_id,
+        ),
+        patch.object(
+            entity,
+            "internal_async_stream_tts_audio",
+            side_effect=internal_stream,
+        ),
+    ):
+        first = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
+        first_policy = first.options[CACHE_POLICY_OPTION]
+        first.async_set_message("Good night")
+        first_audio = b"".join([chunk async for chunk in first.async_stream_result()])
+
+        quiet_voice_available[0] = True
+        second = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
+        second_policy = second.options[CACHE_POLICY_OPTION]
+        second.async_set_message("Good night")
+        second_audio = b"".join([chunk async for chunk in second.async_stream_result()])
+
+        third = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
+        third_policy = third.options[CACHE_POLICY_OPTION]
+        third.async_set_message("Good night")
+        third_audio = b"".join([chunk async for chunk in third.async_stream_result()])
+
+    assert first_audio == b"normal"
+    assert second_audio == b"whisper"
+    assert third_audio == b"whisper"
+    assert first_policy != second_policy
+    assert second_policy == third_policy
+    assert [call[2]["voice"] for call in source.calls] == ["normal", "whisper"]
+
+
 def test_policy_configuration_change_updates_cache_fingerprint(hass) -> None:
     """Changing quiet policy configuration differentiates future cache entries."""
     source = MockTTS()
