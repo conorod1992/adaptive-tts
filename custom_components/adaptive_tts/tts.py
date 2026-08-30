@@ -87,12 +87,9 @@ def _validate_tts_audio_result(
     entity_id: str, extension: Any, data: Any
 ) -> tuple[str, bytes]:
     """Validate one-shot audio returned by an underlying provider."""
-    if (
-        not isinstance(extension, str)
-        or not extension
-        or not isinstance(data, bytes)
-        or not data
-    ):
+    if not extension or not data:
+        raise HomeAssistantError(f"No TTS audio returned by {entity_id}")
+    if not isinstance(extension, str) or not isinstance(data, bytes):
         raise HomeAssistantError(f"Invalid TTS audio returned by {entity_id}")
     return extension, data
 
