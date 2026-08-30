@@ -119,9 +119,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         stored = await self._override_store.async_load()
         if stored and stored.get("voice"):
             token = (
-                str(stored["token"])
-                if stored.get("token")
-                else secrets.token_hex(8)
+                str(stored["token"]) if stored.get("token") else secrets.token_hex(8)
             )
             self._persistent_voice_override = VoiceOverride(
                 voice=str(stored["voice"]),
@@ -156,9 +154,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         """Return the configured underlying TTS entity ID."""
         return self._config[CONF_UNDERLYING_TTS_ENTITY]
 
-    def _underlying_for_entity_id(
-        self, entity_id: str
-    ) -> TextToSpeechEntity | None:
+    def _underlying_for_entity_id(self, entity_id: str) -> TextToSpeechEntity | None:
         """Resolve a non-recursive TTS entity by ID."""
         if not hasattr(self, "hass"):
             return None
@@ -210,9 +206,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         options[CACHE_POLICY_OPTION] = self._policy_cache_value()
         return options
 
-    def _current_policy_snapshot(
-        self, now: datetime | None = None
-    ) -> PolicySnapshot:
+    def _current_policy_snapshot(self, now: datetime | None = None) -> PolicySnapshot:
         """Capture the effective policy for a newly prepared TTS request."""
         config = self._config
         override_scope: str | None = None
@@ -303,9 +297,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 override_scope not in (SCOPE_NEXT_REQUEST, SCOPE_PERSISTENT)
                 or not isinstance(override_voice, str)
                 or not override_voice
-                or not (
-                    override_language is None or isinstance(override_language, str)
-                )
+                or not (override_language is None or isinstance(override_language, str))
                 or not isinstance(override_token, str)
                 or not override_token
             ):
@@ -478,9 +470,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         if scope not in (SCOPE_ALL, SCOPE_NEXT_REQUEST, SCOPE_PERSISTENT):
             raise HomeAssistantError(f"Unsupported voice override scope: {scope}")
 
-    def _override_from_snapshot(
-        self, snapshot: PolicySnapshot
-    ) -> VoiceOverride | None:
+    def _override_from_snapshot(self, snapshot: PolicySnapshot) -> VoiceOverride | None:
         """Return the explicit override captured for this request."""
         override = snapshot.voice_override
         if override is None:
