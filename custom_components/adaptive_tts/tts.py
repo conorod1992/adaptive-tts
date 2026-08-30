@@ -703,6 +703,25 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         snapshot = self._policy_snapshot_from_options(options, now=now)
         return self._resolve_request_with_snapshot(language, options, snapshot)
 
+    async def async_resolve_request_for_preflight(
+        self,
+        language: str | None,
+        options: Mapping[str, Any] | None,
+    ) -> ResolvedRequest:
+        """Resolve without consuming a valid one-shot, but recover failed overrides."""
+        snapshot = self._policy_snapshot_from_options(options)
+        request_override = self._override_from_snapshot(snapshot)
+        request_scope = (
+            snapshot.override_scope if request_override is not None else None
+        )
+        try:
+            return self._resolve_request_with_snapshot(language, options, snapshot)
+        except Exception:
+            await self._async_clear_failed_voice_override(
+                request_override, request_scope
+            )
+            raise
+
     async def _async_resolve_for_synthesis(
         self,
         language: str | None,

@@ -195,7 +195,9 @@ async def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
     )
     try:
         if isinstance(engine, AdaptiveTTSEntity):
-            resolved = engine.resolve_request(stream.language, stream.options)
+            resolved = await engine.async_resolve_request_for_preflight(
+                stream.language, stream.options
+            )
             underlying_entity_id = resolved.underlying_entity_id
             effective_language = resolved.language
             effective_options = resolved.options
