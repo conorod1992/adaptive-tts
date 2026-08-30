@@ -55,7 +55,9 @@ class _PreflightStream:
         self.message_stream = message_stream
 
     async def async_stream_result(self):
-        raise AssertionError("preview synthesis should not start after failed preflight")
+        raise AssertionError(
+            "preview synthesis should not start after failed preflight"
+        )
         yield b""  # pragma: no cover
 
     def delete(self) -> None:
@@ -63,7 +65,9 @@ class _PreflightStream:
 
 
 @pytest.mark.asyncio
-async def test_preview_preflight_clears_stale_persistent_override(hass, tmp_path) -> None:
+async def test_preview_preflight_clears_stale_persistent_override(
+    hass, tmp_path
+) -> None:
     """TTS Test clears a persistent voice rejected during its own preflight."""
     hass.config.config_dir = str(tmp_path)
     source = OverrideTTS()
