@@ -1,12 +1,12 @@
 class AdaptiveTtsPanel extends HTMLElement {
   set hass(value) {
     this._hass = value;
-    if (this.isConnected && !this._loaded) this._load();
+    if (this.isConnected && !this._loaded && !this._loading) this._load();
   }
 
   connectedCallback() {
     if (!this.shadowRoot) this._render();
-    if (this._hass && !this._loaded) this._load();
+    if (this._hass && !this._loaded && !this._loading) this._load();
   }
 
   _render() {
@@ -27,6 +27,7 @@ class AdaptiveTtsPanel extends HTMLElement {
           border: 1px solid var(--divider-color); border-radius: 4px; font: inherit;
         }
         textarea { min-height: 120px; resize: vertical; }
+        .option-json { min-height: 72px; }
         .full { grid-column: 1 / -1; }
         .actions { margin-top: 18px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         button {
@@ -138,21 +139,24 @@ class AdaptiveTtsPanel extends HTMLElement {
   }
 
   async _load() {
-    this._loaded = true;
+    if (this._loaded || this._loading || !this._hass || !this.shadowRoot) return;
+    this._loading = true;
+    this._resetLoadControls();
     try {
-      this._data = await this._hass.callWS({ type: "adaptive_tts/info" });
+      const data = await this._hass.callWS({ type: "adaptive_tts/info" });
+      this._data = data;
       const pipeline = this.shadowRoot.getElementById("pipeline");
-      for (const item of this._data.pipelines) this._appendOption(pipeline, item.id, item.name);
+      for (const item of data.pipelines) this._appendOption(pipeline, item.id, item.name);
 
       const engine = this.shadowRoot.getElementById("engine");
-      for (const item of this._data.engines) {
+      for (const item of data.engines) {
         const suffix = item.is_adaptive ? " (Adaptive)" : " (Source)";
         this._appendOption(engine, item.engine_id, `${item.name}${suffix}`);
       }
-      if (!this._data.engines.length) throw new Error("No TTS entities are currently available.");
+      if (!data.engines.length) throw new Error("No TTS entities are currently available.");
 
       const overrideEngine = this.shadowRoot.getElementById("override-engine");
-      for (const item of this._data.engines.filter((candidate) => candidate.is_adaptive)) {
+      for (const item of data.engines.filter((candidate) => candidate.is_adaptive)) {
         this._appendOption(overrideEngine, item.engine_id, item.name);
       }
       const hasAdaptive = overrideEngine.options.length > 0;
@@ -162,10 +166,39 @@ class AdaptiveTtsPanel extends HTMLElement {
       else this._showOverrideError("No Adaptive TTS entities are currently available.");
 
       await this._engineChanged();
+      this._loaded = true;
     } catch (err) {
+      this._loaded = false;
       this._showError(err);
       this._showOverrideError(err);
+    } finally {
+      this._loading = false;
     }
+  }
+
+  _resetLoadControls() {
+    this._data = null;
+    this._engineInfo = null;
+    this._engineInfoLanguage = null;
+    this._overrideEngineInfo = null;
+    this._overrideEngineInfoLanguage = null;
+    this._engineRequestId = (this._engineRequestId || 0) + 1;
+    this._languageRequestId = (this._languageRequestId || 0) + 1;
+    this._overrideEngineRequestId = (this._overrideEngineRequestId || 0) + 1;
+    this._overrideLanguageRequestId = (this._overrideLanguageRequestId || 0) + 1;
+
+    const pipeline = this.shadowRoot.getElementById("pipeline");
+    pipeline.replaceChildren();
+    this._appendOption(pipeline, "", "Direct TTS selection");
+    for (const id of ["engine", "language", "voice", "override-engine", "override-language", "override-voice"]) {
+      this.shadowRoot.getElementById(id).replaceChildren();
+    }
+    this.shadowRoot.getElementById("options").replaceChildren();
+    this.shadowRoot.getElementById("set-override").disabled = true;
+    this.shadowRoot.getElementById("clear-override").disabled = true;
+    this.shadowRoot.getElementById("generate").disabled = true;
+    this._clearError();
+    this._clearOverrideMessages();
   }
 
   _appendOption(select, value, label) {
@@ -175,40 +208,90 @@ class AdaptiveTtsPanel extends HTMLElement {
     select.append(option);
   }
 
+  _requestIsCurrent(counterName, requestId, selectId, expectedValue) {
+    return (
+      this[counterName] === requestId &&
+      this.shadowRoot.getElementById(selectId).value === expectedValue
+    );
+  }
+
   async _overrideEngineChanged() {
     this._clearOverrideMessages();
+    this._overrideEngineInfo = null;
+    this._overrideEngineInfoLanguage = null;
+    this._overrideLanguageRequestId = (this._overrideLanguageRequestId || 0) + 1;
+    const requestId = (this._overrideEngineRequestId || 0) + 1;
+    this._overrideEngineRequestId = requestId;
     const engineId = this.shadowRoot.getElementById("override-engine").value;
+    const setButton = this.shadowRoot.getElementById("set-override");
+    setButton.disabled = true;
     if (!engineId) return;
     try {
-      this._overrideEngineInfo = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId });
+      const info = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId });
+      if (!this._requestIsCurrent("_overrideEngineRequestId", requestId, "override-engine", engineId)) return;
+      this._overrideEngineInfo = info;
       const language = this.shadowRoot.getElementById("override-language");
       language.replaceChildren();
-      for (const item of this._overrideEngineInfo.supported_languages) this._appendOption(language, item, item);
-      if (this._overrideEngineInfo.default_language && this._overrideEngineInfo.supported_languages.includes(this._overrideEngineInfo.default_language)) {
-        language.value = this._overrideEngineInfo.default_language;
+      for (const item of info.supported_languages) this._appendOption(language, item, item);
+      if (info.default_language && info.supported_languages.includes(info.default_language)) {
+        language.value = info.default_language;
       }
       await this._overrideLanguageChanged();
     } catch (err) {
-      this._showOverrideError(err);
+      if (this._requestIsCurrent("_overrideEngineRequestId", requestId, "override-engine", engineId)) {
+        this._showOverrideError(err);
+      }
     }
   }
 
   async _overrideLanguageChanged() {
     this._clearOverrideMessages();
+    this._overrideEngineInfo = null;
+    this._overrideEngineInfoLanguage = null;
+    const requestId = (this._overrideLanguageRequestId || 0) + 1;
+    this._overrideLanguageRequestId = requestId;
     const engineId = this.shadowRoot.getElementById("override-engine").value;
     const language = this.shadowRoot.getElementById("override-language").value;
+    const setButton = this.shadowRoot.getElementById("set-override");
+    setButton.disabled = true;
     if (!engineId || !language) return;
     try {
-      this._overrideEngineInfo = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId, language });
-      const voice = this.shadowRoot.getElementById("override-voice");
-      voice.replaceChildren();
-      for (const item of this._overrideEngineInfo.voices) this._appendOption(voice, item.voice_id, item.name);
-      const hasVoices = voice.options.length > 0;
-      this.shadowRoot.getElementById("set-override").disabled = !hasVoices;
-      if (!hasVoices) this._showOverrideError("The wrapped TTS provider does not expose selectable voices for this language.");
+      const info = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId, language });
+      if (!this._requestIsCurrent("_overrideLanguageRequestId", requestId, "override-language", language)) return;
+      if (this.shadowRoot.getElementById("override-engine").value !== engineId) return;
+      this._overrideEngineInfo = info;
+      this._overrideEngineInfoLanguage = language;
+      const voice = this._replaceVoiceControl(
+        "override-voice",
+        info.voices,
+        info.voices_enumerated,
+        false,
+      );
+      const canSet = !info.voices_enumerated || voice.options.length > 0;
+      setButton.disabled = !canSet;
+      if (info.voices_enumerated && !canSet) {
+        this._showOverrideError("The wrapped TTS provider exposes no selectable voices for this language.");
+      }
     } catch (err) {
-      this._showOverrideError(err);
+      if (this._requestIsCurrent("_overrideLanguageRequestId", requestId, "override-language", language)) {
+        this._showOverrideError(err);
+      }
     }
+  }
+
+  _replaceVoiceControl(id, voices, voicesEnumerated, includeDefault) {
+    const current = this.shadowRoot.getElementById(id);
+    const control = document.createElement(voicesEnumerated ? "select" : "input");
+    control.id = id;
+    if (voicesEnumerated) {
+      if (includeDefault) this._appendOption(control, "", "Provider default");
+      for (const item of voices) this._appendOption(control, item.voice_id, item.name);
+    } else {
+      control.type = "text";
+      control.placeholder = includeDefault ? "Provider default or voice ID" : "Provider voice ID";
+    }
+    current.replaceWith(control);
+    return control;
   }
 
   async _setOverride() {
@@ -218,9 +301,12 @@ class AdaptiveTtsPanel extends HTMLElement {
     try {
       const entityId = this.shadowRoot.getElementById("override-engine").value;
       const language = this.shadowRoot.getElementById("override-language").value;
-      const voice = this.shadowRoot.getElementById("override-voice").value;
+      const voice = this.shadowRoot.getElementById("override-voice").value.trim();
       const duration = this.shadowRoot.getElementById("override-duration").value;
       if (!entityId || !language || !voice) throw new Error("Choose an Adaptive TTS entity, language, and voice first.");
+      if (!this._overrideEngineInfo || this._overrideEngineInfoLanguage !== language) {
+        throw new Error("Voice details are still loading. Try again in a moment.");
+      }
       await this._hass.callService("adaptive_tts", "set_voice_override", {
         entity_id: entityId,
         language,
@@ -232,7 +318,8 @@ class AdaptiveTtsPanel extends HTMLElement {
     } catch (err) {
       this._showOverrideError(err);
     } finally {
-      button.disabled = this.shadowRoot.getElementById("override-voice").options.length === 0;
+      const voice = this.shadowRoot.getElementById("override-voice");
+      button.disabled = !this._overrideEngineInfo || (voice.tagName === "SELECT" && voice.options.length === 0);
     }
   }
 
@@ -251,13 +338,13 @@ class AdaptiveTtsPanel extends HTMLElement {
     } catch (err) {
       this._showOverrideError(err);
     } finally {
-      button.disabled = false;
+      button.disabled = !this.shadowRoot.getElementById("override-engine").value;
     }
   }
 
   async _pipelineChanged() {
     const pipelineId = this.shadowRoot.getElementById("pipeline").value;
-    const pipeline = this._data.pipelines.find((item) => item.id === pipelineId);
+    const pipeline = this._data?.pipelines.find((item) => item.id === pipelineId);
     if (!pipeline) return;
     if (!pipeline.tts_engine || !this._data.engines.some((item) => item.engine_id === pipeline.tts_engine)) {
       this._showError("The selected pipeline does not have an available TTS entity.");
@@ -269,36 +356,69 @@ class AdaptiveTtsPanel extends HTMLElement {
 
   async _engineChanged(preferredLanguage, preferredVoice) {
     this._clearError();
+    this._engineInfo = null;
+    this._engineInfoLanguage = null;
+    this._languageRequestId = (this._languageRequestId || 0) + 1;
+    const requestId = (this._engineRequestId || 0) + 1;
+    this._engineRequestId = requestId;
     const engineId = this.shadowRoot.getElementById("engine").value;
+    this.shadowRoot.getElementById("generate").disabled = true;
+    if (!engineId) return;
     try {
-      this._engineInfo = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId });
+      const info = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId });
+      if (!this._requestIsCurrent("_engineRequestId", requestId, "engine", engineId)) return;
+      this._engineInfo = info;
       const language = this.shadowRoot.getElementById("language");
       language.replaceChildren();
-      for (const item of this._engineInfo.supported_languages) this._appendOption(language, item, item);
-      const requested = preferredLanguage || this._engineInfo.default_language;
-      if (requested && this._engineInfo.supported_languages.includes(requested)) language.value = requested;
+      for (const item of info.supported_languages) this._appendOption(language, item, item);
+      const requested = preferredLanguage || info.default_language;
+      if (requested && info.supported_languages.includes(requested)) language.value = requested;
       await this._languageChanged(preferredVoice);
     } catch (err) {
-      this._showError(err);
+      if (this._requestIsCurrent("_engineRequestId", requestId, "engine", engineId)) {
+        this._showError(err);
+      }
     }
   }
 
   async _languageChanged(preferredVoice) {
+    this._engineInfo = null;
+    this._engineInfoLanguage = null;
+    const requestId = (this._languageRequestId || 0) + 1;
+    this._languageRequestId = requestId;
     const engineId = this.shadowRoot.getElementById("engine").value;
     const language = this.shadowRoot.getElementById("language").value;
+    const generate = this.shadowRoot.getElementById("generate");
+    generate.disabled = true;
+    if (!engineId || !language) return;
     try {
-      this._engineInfo = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId, language });
-      const voice = this.shadowRoot.getElementById("voice");
-      voice.replaceChildren();
-      this._appendOption(voice, "", "Provider default");
-      for (const item of this._engineInfo.voices) this._appendOption(voice, item.voice_id, item.name);
-      const defaultVoice = preferredVoice || this._engineInfo.default_options.voice;
-      if (defaultVoice && [...voice.options].some((item) => item.value === defaultVoice)) voice.value = defaultVoice;
+      const info = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId, language });
+      if (!this._requestIsCurrent("_languageRequestId", requestId, "language", language)) return;
+      if (this.shadowRoot.getElementById("engine").value !== engineId) return;
+      this._engineInfo = info;
+      this._engineInfoLanguage = language;
+      const voice = this._replaceVoiceControl(
+        "voice",
+        info.voices,
+        info.voices_enumerated,
+        true,
+      );
+      const defaultVoice = preferredVoice || info.default_options.voice;
+      if (defaultVoice) {
+        if (voice.tagName === "SELECT") {
+          if ([...voice.options].some((item) => item.value === defaultVoice)) voice.value = defaultVoice;
+        } else {
+          voice.value = defaultVoice;
+        }
+      }
       this.shadowRoot.getElementById("voice-label").style.display =
-        this._engineInfo.supported_options.includes("voice") ? "flex" : "none";
+        info.supported_options.includes("voice") ? "flex" : "none";
       this._renderOptionInputs();
+      generate.disabled = false;
     } catch (err) {
-      this._showError(err);
+      if (this._requestIsCurrent("_languageRequestId", requestId, "language", language)) {
+        this._showError(err);
+      }
     }
   }
 
@@ -308,13 +428,54 @@ class AdaptiveTtsPanel extends HTMLElement {
     for (const name of this._engineInfo.supported_options.filter((item) => item !== "voice")) {
       const label = document.createElement("label");
       label.textContent = name;
-      const input = document.createElement("input");
+      const defaultValue = this._engineInfo.default_options[name];
+      let input;
+      if (typeof defaultValue === "boolean") {
+        input = document.createElement("select");
+        this._appendOption(input, "true", "True");
+        this._appendOption(input, "false", "False");
+        input.value = String(defaultValue);
+        input.dataset.optionType = "boolean";
+      } else if (typeof defaultValue === "number") {
+        input = document.createElement("input");
+        input.type = "number";
+        input.step = "any";
+        input.value = String(defaultValue);
+        input.dataset.optionType = "number";
+      } else if (defaultValue !== null && typeof defaultValue === "object") {
+        input = document.createElement("textarea");
+        input.className = "option-json";
+        input.value = JSON.stringify(defaultValue);
+        input.dataset.optionType = "json";
+      } else {
+        input = document.createElement("input");
+        input.type = "text";
+        input.value = defaultValue ?? "";
+        input.placeholder = "Provider default";
+        input.dataset.optionType = "string";
+      }
       input.dataset.option = name;
-      input.value = this._engineInfo.default_options[name] ?? "";
-      input.placeholder = "Provider default";
       label.append(input);
       container.append(label);
     }
+  }
+
+  _readOptionInput(input) {
+    if (input.value === "") return undefined;
+    if (input.dataset.optionType === "boolean") return input.value === "true";
+    if (input.dataset.optionType === "number") {
+      const value = Number(input.value);
+      if (!Number.isFinite(value)) throw new Error(`${input.dataset.option} must be a number.`);
+      return value;
+    }
+    if (input.dataset.optionType === "json") {
+      try {
+        return JSON.parse(input.value);
+      } catch {
+        throw new Error(`${input.dataset.option} must contain valid JSON.`);
+      }
+    }
+    return input.value;
   }
 
   async _generate() {
@@ -322,19 +483,25 @@ class AdaptiveTtsPanel extends HTMLElement {
     this._clearResult();
     const button = this.shadowRoot.getElementById("generate");
     button.disabled = true;
-    const options = {};
-    if (this._engineInfo.supported_options.includes("voice")) {
-      const voice = this.shadowRoot.getElementById("voice").value;
-      if (voice) options.voice = voice;
-    }
-    for (const input of this.shadowRoot.querySelectorAll("[data-option]")) {
-      if (input.value !== "") options[input.dataset.option] = input.value;
-    }
     try {
+      const engineId = this.shadowRoot.getElementById("engine").value;
+      const language = this.shadowRoot.getElementById("language").value;
+      if (!this._engineInfo || this._engineInfoLanguage !== language) {
+        throw new Error("Provider details are still loading. Try again in a moment.");
+      }
+      const options = {};
+      if (this._engineInfo.supported_options.includes("voice")) {
+        const voice = this.shadowRoot.getElementById("voice").value.trim();
+        if (voice) options.voice = voice;
+      }
+      for (const input of this.shadowRoot.querySelectorAll("[data-option]")) {
+        const value = this._readOptionInput(input);
+        if (value !== undefined) options[input.dataset.option] = value;
+      }
       const result = await this._hass.callWS({
         type: "adaptive_tts/generate",
-        engine_id: this.shadowRoot.getElementById("engine").value,
-        language: this.shadowRoot.getElementById("language").value,
+        engine_id: engineId,
+        language,
         options,
         message: this.shadowRoot.getElementById("message").value,
       });
@@ -351,7 +518,7 @@ class AdaptiveTtsPanel extends HTMLElement {
       this._clearResult();
       this._showError(err);
     } finally {
-      button.disabled = false;
+      button.disabled = !this._engineInfo;
     }
   }
 
