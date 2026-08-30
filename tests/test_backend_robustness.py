@@ -104,9 +104,7 @@ async def test_persistent_override_is_discarded_after_provider_change(
     with patch(
         "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
     ):
-        await first.async_set_voice_override(
-            "en-US", "whisper", DURATION_UNTIL_CHANGED
-        )
+        await first.async_set_voice_override("en-US", "whisper", DURATION_UNTIL_CHANGED)
     assert first.persistent_voice_override is not None
 
     changed_entry = make_entry("tts.other", entry_id=old_entry.entry_id)
@@ -148,9 +146,7 @@ async def test_persistent_set_and_clear_are_serialized(hass) -> None:
         "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
     ):
         set_task = asyncio.create_task(
-            entity.async_set_voice_override(
-                "en-US", "whisper", DURATION_UNTIL_CHANGED
-            )
+            entity.async_set_voice_override("en-US", "whisper", DURATION_UNTIL_CHANGED)
         )
         await save_started.wait()
         clear_task = asyncio.create_task(entity.async_clear_voice_override(SCOPE_ALL))
