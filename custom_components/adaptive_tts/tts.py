@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
+import json
 import logging
 import secrets
 from collections.abc import Mapping
@@ -45,6 +45,7 @@ from .helpers import entry_config, get_tts_entity, is_time_in_range
 
 _LOGGER = logging.getLogger(__name__)
 _STORAGE_VERSION = 1
+_POLICY_SNAPSHOT_PREFIX = "snapshot-v2:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,19 @@ class VoiceOverride:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicySnapshot:
+    """Policy state captured when Home Assistant prepares a TTS request."""
+
+    underlying_entity_id: str
+    quiet_mode_active: bool
+    quiet_option: str
+    quiet_language: str | None
+    quiet_value: str
+    override_scope: str | None = None
+    voice_override: VoiceOverride | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedRequest:
     """A TTS request after Adaptive TTS policy is applied."""
 
@@ -65,6 +79,7 @@ class ResolvedRequest:
     options: dict[str, Any]
     quiet_mode_active: bool
     voice_override: VoiceOverride | None = None
+    voice_override_scope: str | None = None
 
 
 async def async_setup_entry(
@@ -103,10 +118,22 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         )
         stored = await self._override_store.async_load()
         if stored and stored.get("voice"):
+            token = (
+                str(stored["token"]) if stored.get("token") else secrets.token_hex(8)
+            )
             self._persistent_voice_override = VoiceOverride(
                 voice=str(stored["voice"]),
                 language=(str(stored["language"]) if stored.get("language") else None),
+                token=token,
             )
+            if not stored.get("token"):
+                await self._override_store.async_save(
+                    {
+                        "language": self._persistent_voice_override.language,
+                        "voice": self._persistent_voice_override.voice,
+                        "token": token,
+                    }
+                )
 
     @property
     def persistent_voice_override(self) -> VoiceOverride | None:
@@ -127,14 +154,18 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         """Return the configured underlying TTS entity ID."""
         return self._config[CONF_UNDERLYING_TTS_ENTITY]
 
-    @property
-    def _underlying(self) -> TextToSpeechEntity | None:
+    def _underlying_for_entity_id(self, entity_id: str) -> TextToSpeechEntity | None:
+        """Resolve a non-recursive TTS entity by ID."""
         if not hasattr(self, "hass"):
             return None
-        engine = get_tts_entity(self.hass, self.underlying_entity_id)
+        engine = get_tts_entity(self.hass, entity_id)
         if engine is self or getattr(engine, "is_adaptive_tts", False):
             return None
         return engine
+
+    @property
+    def _underlying(self) -> TextToSpeechEntity | None:
+        return self._underlying_for_entity_id(self.underlying_entity_id)
 
     @property
     @override
@@ -175,39 +206,171 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         options[CACHE_POLICY_OPTION] = self._policy_cache_value()
         return options
 
-    def _policy_cache_value(self) -> str:
-        """Return a stable fingerprint of configuration and current policy state."""
+    def _current_policy_snapshot(self, now: datetime | None = None) -> PolicySnapshot:
+        """Capture the effective policy for a newly prepared TTS request."""
         config = self._config
-        quiet_active = self.is_quiet_mode_active()
-        next_override = self._next_voice_override
-        persistent_override = self._persistent_voice_override
-        override_marker = "none"
-        if next_override and next_override.token:
-            override_marker = f"next:{next_override.token}"
-        elif persistent_override:
-            override_marker = "persistent"
+        override_scope: str | None = None
+        voice_override: VoiceOverride | None = None
+        if self._next_voice_override is not None:
+            override_scope = SCOPE_NEXT_REQUEST
+            voice_override = self._next_voice_override
+        elif self._persistent_voice_override is not None:
+            override_scope = SCOPE_PERSISTENT
+            voice_override = self._persistent_voice_override
 
-        policy = "\0".join(
-            str(value)
-            for value in (
-                config[CONF_UNDERLYING_TTS_ENTITY],
-                config[CONF_QUIET_MODE],
-                config[CONF_QUIET_START],
-                config[CONF_QUIET_END],
-                config[CONF_QUIET_OPTION],
-                config.get(CONF_QUIET_LANGUAGE, ""),
-                config[CONF_QUIET_VALUE],
-                quiet_active,
-                override_marker,
-                next_override.language if next_override else "",
-                next_override.voice if next_override else "",
-                persistent_override.language if persistent_override else "",
-                persistent_override.voice if persistent_override else "",
-            )
+        return PolicySnapshot(
+            underlying_entity_id=config[CONF_UNDERLYING_TTS_ENTITY],
+            quiet_mode_active=self.is_quiet_mode_active(now),
+            quiet_option=config[CONF_QUIET_OPTION],
+            quiet_language=config.get(CONF_QUIET_LANGUAGE),
+            quiet_value=config[CONF_QUIET_VALUE],
+            override_scope=override_scope,
+            voice_override=voice_override,
         )
-        state = "quiet" if quiet_active else "normal"
-        digest = hashlib.blake2s(policy.encode(), digest_size=8).hexdigest()
-        return f"{state}|{override_marker}|{digest}"
+
+    @staticmethod
+    def _encode_policy_snapshot(snapshot: PolicySnapshot) -> str:
+        """Serialize a policy snapshot into Home Assistant's TTS cache options."""
+        override = snapshot.voice_override
+        payload: dict[str, Any] = {
+            "underlying": snapshot.underlying_entity_id,
+            "quiet": snapshot.quiet_mode_active,
+            "quiet_option": snapshot.quiet_option,
+            "quiet_language": snapshot.quiet_language,
+            "quiet_value": snapshot.quiet_value,
+            "override": None,
+            # A one-shot override must not let two separately prepared streams
+            # share the same HA cache entry before either one consumes it.
+            "request": (
+                secrets.token_hex(8)
+                if snapshot.override_scope == SCOPE_NEXT_REQUEST
+                else None
+            ),
+        }
+        if override is not None and snapshot.override_scope is not None:
+            payload["override"] = {
+                "scope": snapshot.override_scope,
+                "language": override.language,
+                "voice": override.voice,
+                "token": override.token,
+            }
+        return _POLICY_SNAPSHOT_PREFIX + json.dumps(
+            payload, sort_keys=True, separators=(",", ":")
+        )
+
+    @staticmethod
+    def _decode_policy_snapshot(value: str) -> PolicySnapshot:
+        """Decode and validate a versioned policy snapshot."""
+        try:
+            payload = json.loads(value.removeprefix(_POLICY_SNAPSHOT_PREFIX))
+        except (TypeError, ValueError) as err:
+            raise HomeAssistantError("Invalid Adaptive TTS policy snapshot") from err
+
+        if not isinstance(payload, dict):
+            raise HomeAssistantError("Invalid Adaptive TTS policy snapshot")
+
+        underlying = payload.get("underlying")
+        quiet = payload.get("quiet")
+        quiet_option = payload.get("quiet_option")
+        quiet_language = payload.get("quiet_language")
+        quiet_value = payload.get("quiet_value")
+        if (
+            not isinstance(underlying, str)
+            or not isinstance(quiet, bool)
+            or not isinstance(quiet_option, str)
+            or not isinstance(quiet_value, str)
+            or not (quiet_language is None or isinstance(quiet_language, str))
+        ):
+            raise HomeAssistantError("Invalid Adaptive TTS policy snapshot")
+
+        override_scope: str | None = None
+        voice_override: VoiceOverride | None = None
+        override = payload.get("override")
+        if override is not None:
+            if not isinstance(override, dict):
+                raise HomeAssistantError("Invalid Adaptive TTS policy snapshot")
+            override_scope = override.get("scope")
+            override_language = override.get("language")
+            override_voice = override.get("voice")
+            override_token = override.get("token")
+            if (
+                override_scope not in (SCOPE_NEXT_REQUEST, SCOPE_PERSISTENT)
+                or not isinstance(override_voice, str)
+                or not override_voice
+                or not (override_language is None or isinstance(override_language, str))
+                or not isinstance(override_token, str)
+                or not override_token
+            ):
+                raise HomeAssistantError("Invalid Adaptive TTS policy snapshot")
+            voice_override = VoiceOverride(
+                voice=override_voice,
+                language=override_language,
+                token=override_token,
+            )
+
+        return PolicySnapshot(
+            underlying_entity_id=underlying,
+            quiet_mode_active=quiet,
+            quiet_option=quiet_option,
+            quiet_language=quiet_language,
+            quiet_value=quiet_value,
+            override_scope=override_scope,
+            voice_override=voice_override,
+        )
+
+    def _legacy_policy_snapshot(
+        self, value: str, now: datetime | None = None
+    ) -> PolicySnapshot:
+        """Interpret cache markers produced before snapshot-v2."""
+        config = self._config
+        quiet_active = self.is_quiet_mode_active(now)
+        override_scope: str | None = None
+        voice_override: VoiceOverride | None = None
+
+        if "|" in value:
+            state, marker, _digest = value.split("|", 2)
+            quiet_active = state == "quiet"
+            if marker.startswith("next:"):
+                token = marker.partition(":")[2]
+                pending = self._next_voice_override
+                if pending is not None and pending.token == token:
+                    override_scope = SCOPE_NEXT_REQUEST
+                    voice_override = pending
+            elif marker == "persistent" and self._persistent_voice_override is not None:
+                override_scope = SCOPE_PERSISTENT
+                voice_override = self._persistent_voice_override
+        else:
+            quiet_active = value.startswith("quiet:")
+
+        return PolicySnapshot(
+            underlying_entity_id=config[CONF_UNDERLYING_TTS_ENTITY],
+            quiet_mode_active=quiet_active,
+            quiet_option=config[CONF_QUIET_OPTION],
+            quiet_language=config.get(CONF_QUIET_LANGUAGE),
+            quiet_value=config[CONF_QUIET_VALUE],
+            override_scope=override_scope,
+            voice_override=voice_override,
+        )
+
+    def _policy_snapshot_from_options(
+        self,
+        options: Mapping[str, Any] | None,
+        *,
+        now: datetime | None = None,
+    ) -> PolicySnapshot:
+        """Return the policy captured in manager-processed options."""
+        cache_value = (options or {}).get(CACHE_POLICY_OPTION)
+        if cache_value is None:
+            return self._current_policy_snapshot(now)
+        if not isinstance(cache_value, str):
+            raise HomeAssistantError("Invalid Adaptive TTS policy snapshot")
+        if cache_value.startswith(_POLICY_SNAPSHOT_PREFIX):
+            return self._decode_policy_snapshot(cache_value)
+        return self._legacy_policy_snapshot(cache_value, now)
+
+    def _policy_cache_value(self) -> str:
+        """Return a self-contained snapshot used in Home Assistant's cache key."""
+        return self._encode_policy_snapshot(self._current_policy_snapshot())
 
     @callback
     @override
@@ -278,13 +441,22 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             return
         if duration != DURATION_UNTIL_CHANGED:
             raise HomeAssistantError(f"Unsupported voice override duration: {duration}")
-        self._persistent_voice_override = override
+        persistent = VoiceOverride(
+            voice=override.voice,
+            language=override.language,
+            token=secrets.token_hex(8),
+        )
+        self._persistent_voice_override = persistent
         if self._override_store is None:
             raise HomeAssistantError(
                 "Adaptive TTS voice override storage is unavailable"
             )
         await self._override_store.async_save(
-            {"language": override.language, "voice": override.voice}
+            {
+                "language": persistent.language,
+                "voice": persistent.voice,
+                "token": persistent.token,
+            }
         )
 
     async def async_clear_voice_override(self, scope: str = SCOPE_ALL) -> None:
@@ -298,48 +470,44 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         if scope not in (SCOPE_ALL, SCOPE_NEXT_REQUEST, SCOPE_PERSISTENT):
             raise HomeAssistantError(f"Unsupported voice override scope: {scope}")
 
-    def _override_from_cache_marker(self, marker: str) -> VoiceOverride | None:
-        """Return the override represented by a cache marker without consuming it."""
-        if marker.startswith("next:"):
-            token = marker.partition(":")[2]
-            pending = self._next_voice_override
-            if pending is not None and pending.token == token:
-                return pending
+    def _override_from_snapshot(self, snapshot: PolicySnapshot) -> VoiceOverride | None:
+        """Return the explicit override captured for this request."""
+        override = snapshot.voice_override
+        if override is None:
             return None
-        if marker in ("none", "persistent"):
-            return self._persistent_voice_override
+        if snapshot.override_scope == SCOPE_NEXT_REQUEST:
+            pending = self._next_voice_override
+            if pending is not None and pending.token == override.token:
+                return override
+            return None
+        if snapshot.override_scope == SCOPE_PERSISTENT:
+            return override
         return None
 
-    def _override_for_options(
-        self, options: Mapping[str, Any] | None
-    ) -> VoiceOverride | None:
-        """Return the explicit override associated with manager-processed options."""
-        policy_cache_value = (options or {}).get(CACHE_POLICY_OPTION)
-        marker = "none"
-        if isinstance(policy_cache_value, str) and "|" in policy_cache_value:
-            _state, marker, _digest = policy_cache_value.split("|", 2)
-        return self._override_from_cache_marker(marker)
-
-    def _consume_next_voice_override(self, override: VoiceOverride | None) -> None:
+    def _consume_next_voice_override(
+        self, override: VoiceOverride | None, scope: str | None
+    ) -> None:
         """Consume a matching one-shot override when synthesis actually starts."""
-        if override is None or override.token is None:
+        if scope != SCOPE_NEXT_REQUEST or override is None or override.token is None:
             return
         pending = self._next_voice_override
         if pending is not None and pending.token == override.token:
             self._next_voice_override = None
 
     async def _async_clear_failed_voice_override(
-        self, override: VoiceOverride | None
+        self, override: VoiceOverride | None, scope: str | None
     ) -> None:
         """Clear an explicit override after a request using it fails."""
         if override is None:
             return
-        if override.token is not None:
-            self._consume_next_voice_override(override)
+        if scope == SCOPE_NEXT_REQUEST:
+            self._consume_next_voice_override(override, scope)
+            return
+        if scope != SCOPE_PERSISTENT:
             return
 
         persistent = self._persistent_voice_override
-        if persistent != override:
+        if persistent is None or persistent.token != override.token:
             return
         self._persistent_voice_override = None
         if self._override_store is not None:
@@ -357,77 +525,69 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             self.underlying_entity_id,
         )
 
-    @callback
-    def resolve_request(
+    def _resolve_request_with_snapshot(
         self,
         language: str | None,
         options: Mapping[str, Any] | None,
-        *,
-        now: datetime | None = None,
+        snapshot: PolicySnapshot,
     ) -> ResolvedRequest:
-        """Validate and apply Adaptive TTS policy to a request."""
-        underlying = self._underlying
+        """Validate and apply a previously captured Adaptive TTS policy."""
+        underlying = self._underlying_for_entity_id(snapshot.underlying_entity_id)
         if underlying is None:
             _LOGGER.error(
                 "Underlying TTS entity %s is missing, unavailable, or recursive",
-                self.underlying_entity_id,
+                snapshot.underlying_entity_id,
             )
             raise HomeAssistantError(
-                f"Underlying TTS entity {self.underlying_entity_id} is not available"
+                f"Underlying TTS entity {snapshot.underlying_entity_id} "
+                "is not available"
             )
         if not underlying.available:
             _LOGGER.error(
-                "Underlying TTS entity %s is unavailable", self.underlying_entity_id
+                "Underlying TTS entity %s is unavailable",
+                snapshot.underlying_entity_id,
             )
             raise HomeAssistantError(
-                f"Underlying TTS entity {self.underlying_entity_id} is unavailable"
+                f"Underlying TTS entity {snapshot.underlying_entity_id} is unavailable"
             )
 
         incoming_options = dict(options or {})
-        policy_cache_value = incoming_options.pop(CACHE_POLICY_OPTION, None)
-        override_marker = "none"
-        if isinstance(policy_cache_value, str) and "|" in policy_cache_value:
-            state, override_marker, _digest = policy_cache_value.split("|", 2)
-            quiet_active = state == "quiet"
-        elif isinstance(policy_cache_value, str):
-            quiet_active = policy_cache_value.startswith("quiet:")
-        else:
-            quiet_active = self.is_quiet_mode_active(now)
-        explicit_override = self._override_from_cache_marker(override_marker)
-        config = self._config
+        incoming_options.pop(CACHE_POLICY_OPTION, None)
+        explicit_override = self._override_from_snapshot(snapshot)
+        quiet_active = snapshot.quiet_mode_active
 
         effective_language = language or underlying.default_language
         if explicit_override and explicit_override.language:
             effective_language = explicit_override.language
-        elif quiet_active and config[CONF_QUIET_OPTION] == "voice":
-            effective_language = config.get(CONF_QUIET_LANGUAGE) or effective_language
+        elif quiet_active and snapshot.quiet_option == "voice":
+            effective_language = snapshot.quiet_language or effective_language
 
         if effective_language not in underlying.supported_languages:
             _LOGGER.error(
                 "Underlying TTS entity %s does not support language %s",
-                self.underlying_entity_id,
+                snapshot.underlying_entity_id,
                 effective_language,
             )
             raise HomeAssistantError(
                 f"Language '{effective_language}' is not supported by "
-                f"{self.underlying_entity_id}"
+                f"{snapshot.underlying_entity_id}"
             )
 
         effective_options = dict(underlying.default_options or {})
         effective_options.update(incoming_options)
         if quiet_active:
-            option_name = config[CONF_QUIET_OPTION]
-            option_value = config[CONF_QUIET_VALUE]
+            option_name = snapshot.quiet_option
+            option_value = snapshot.quiet_value
             supported_options = underlying.supported_options or []
             if option_name not in supported_options:
                 _LOGGER.error(
                     "Quiet override option %s is no longer supported by %s",
                     option_name,
-                    self.underlying_entity_id,
+                    snapshot.underlying_entity_id,
                 )
                 raise HomeAssistantError(
                     f"Quiet override option '{option_name}' is not supported by "
-                    f"{self.underlying_entity_id}"
+                    f"{snapshot.underlying_entity_id}"
                 )
             if option_name == "voice" and explicit_override is not None:
                 pass
@@ -440,19 +600,19 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                         _LOGGER.error(
                             "Quiet voice %s is no longer supported by %s for %s",
                             option_value,
-                            self.underlying_entity_id,
+                            snapshot.underlying_entity_id,
                             effective_language,
                         )
                         raise HomeAssistantError(
                             f"Quiet voice '{option_value}' is not supported by "
-                            f"{self.underlying_entity_id} for {effective_language}"
+                            f"{snapshot.underlying_entity_id} for {effective_language}"
                         )
                 effective_options[option_name] = option_value
 
         if explicit_override is not None:
             if "voice" not in (underlying.supported_options or []):
                 raise HomeAssistantError(
-                    f"{self.underlying_entity_id} does not support voice overrides"
+                    f"{snapshot.underlying_entity_id} does not support voice overrides"
                 )
             voices = underlying.async_get_supported_voices(effective_language)
             if voices and explicit_override.voice not in {
@@ -460,17 +620,32 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             }:
                 raise HomeAssistantError(
                     f"Voice '{explicit_override.voice}' is not supported by "
-                    f"{self.underlying_entity_id} for {effective_language}"
+                    f"{snapshot.underlying_entity_id} for {effective_language}"
                 )
             effective_options["voice"] = explicit_override.voice
 
         return ResolvedRequest(
-            underlying_entity_id=self.underlying_entity_id,
+            underlying_entity_id=snapshot.underlying_entity_id,
             language=effective_language,
             options=effective_options,
             quiet_mode_active=quiet_active,
             voice_override=explicit_override,
+            voice_override_scope=(
+                snapshot.override_scope if explicit_override is not None else None
+            ),
         )
+
+    @callback
+    def resolve_request(
+        self,
+        language: str | None,
+        options: Mapping[str, Any] | None,
+        *,
+        now: datetime | None = None,
+    ) -> ResolvedRequest:
+        """Validate and apply Adaptive TTS policy to a request."""
+        snapshot = self._policy_snapshot_from_options(options, now=now)
+        return self._resolve_request_with_snapshot(language, options, snapshot)
 
     async def _async_resolve_for_synthesis(
         self,
@@ -478,13 +653,21 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         options: Mapping[str, Any] | None,
     ) -> ResolvedRequest:
         """Resolve a synthesis request and clear a failing explicit override."""
-        request_override = self._override_for_options(options)
+        snapshot = self._policy_snapshot_from_options(options)
+        request_override = self._override_from_snapshot(snapshot)
+        request_scope = (
+            snapshot.override_scope if request_override is not None else None
+        )
         try:
-            resolved = self.resolve_request(language, options)
+            resolved = self._resolve_request_with_snapshot(language, options, snapshot)
         except Exception:
-            await self._async_clear_failed_voice_override(request_override)
+            await self._async_clear_failed_voice_override(
+                request_override, request_scope
+            )
             raise
-        self._consume_next_voice_override(resolved.voice_override)
+        self._consume_next_voice_override(
+            resolved.voice_override, resolved.voice_override_scope
+        )
         return resolved
 
     @override
@@ -493,28 +676,34 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
     ) -> TtsAudioType:
         """Generate one-shot audio through the underlying entity."""
         resolved = await self._async_resolve_for_synthesis(language, options)
-        underlying = self._underlying
+        underlying = self._underlying_for_entity_id(resolved.underlying_entity_id)
         if underlying is None:
-            await self._async_clear_failed_voice_override(resolved.voice_override)
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
             raise HomeAssistantError(
-                f"Underlying TTS entity {self.underlying_entity_id} disappeared"
+                f"Underlying TTS entity {resolved.underlying_entity_id} disappeared"
             )
         try:
             return await underlying.async_get_tts_audio(
                 message, resolved.language, resolved.options
             )
         except HomeAssistantError:
-            await self._async_clear_failed_voice_override(resolved.voice_override)
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
             raise
         except Exception as err:
-            await self._async_clear_failed_voice_override(resolved.voice_override)
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
             _LOGGER.error(
                 "Underlying TTS generation failed for %s: %s",
-                self.underlying_entity_id,
+                resolved.underlying_entity_id,
                 err,
             )
             raise HomeAssistantError(
-                f"TTS generation failed in {self.underlying_entity_id}: {err}"
+                f"TTS generation failed in {resolved.underlying_entity_id}: {err}"
             ) from err
 
     @override
@@ -525,11 +714,13 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         resolved = await self._async_resolve_for_synthesis(
             request.language, request.options
         )
-        underlying = self._underlying
+        underlying = self._underlying_for_entity_id(resolved.underlying_entity_id)
         if underlying is None:
-            await self._async_clear_failed_voice_override(resolved.voice_override)
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
             raise HomeAssistantError(
-                f"Underlying TTS entity {self.underlying_entity_id} disappeared"
+                f"Underlying TTS entity {resolved.underlying_entity_id} disappeared"
             )
         if underlying.async_supports_streaming_input():
             try:
@@ -539,18 +730,22 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                     )
                 )
             except HomeAssistantError:
-                await self._async_clear_failed_voice_override(resolved.voice_override)
+                await self._async_clear_failed_voice_override(
+                    resolved.voice_override, resolved.voice_override_scope
+                )
                 raise
             except Exception as err:
-                await self._async_clear_failed_voice_override(resolved.voice_override)
+                await self._async_clear_failed_voice_override(
+                    resolved.voice_override, resolved.voice_override_scope
+                )
                 _LOGGER.error(
                     "Underlying streaming TTS generation failed for %s: %s",
-                    self.underlying_entity_id,
+                    resolved.underlying_entity_id,
                     err,
                 )
                 raise HomeAssistantError(
                     f"Streaming TTS generation failed in "
-                    f"{self.underlying_entity_id}: {err}"
+                    f"{resolved.underlying_entity_id}: {err}"
                 ) from err
 
             async def guarded_data_gen():
@@ -559,7 +754,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                         yield chunk
                 except Exception:
                     await self._async_clear_failed_voice_override(
-                        resolved.voice_override
+                        resolved.voice_override, resolved.voice_override_scope
                     )
                     raise
 
@@ -571,22 +766,28 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 message, resolved.language, resolved.options
             )
         except HomeAssistantError:
-            await self._async_clear_failed_voice_override(resolved.voice_override)
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
             raise
         except Exception as err:
-            await self._async_clear_failed_voice_override(resolved.voice_override)
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
             _LOGGER.error(
                 "Underlying TTS generation failed for %s: %s",
-                self.underlying_entity_id,
+                resolved.underlying_entity_id,
                 err,
             )
             raise HomeAssistantError(
-                f"TTS generation failed in {self.underlying_entity_id}: {err}"
+                f"TTS generation failed in {resolved.underlying_entity_id}: {err}"
             ) from err
         if extension is None or data is None:
-            await self._async_clear_failed_voice_override(resolved.voice_override)
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
             raise HomeAssistantError(
-                f"No TTS audio returned by {self.underlying_entity_id}"
+                f"No TTS audio returned by {resolved.underlying_entity_id}"
             )
 
         async def data_gen():
