@@ -12,6 +12,11 @@ from datetime import datetime
 from typing import Any, override
 
 from homeassistant.components.tts import (
+    ATTR_PREFERRED_BITRATE,
+    ATTR_PREFERRED_FORMAT,
+    ATTR_PREFERRED_SAMPLE_BYTES,
+    ATTR_PREFERRED_SAMPLE_CHANNELS,
+    ATTR_PREFERRED_SAMPLE_RATE,
     TextToSpeechEntity,
     TTSAudioRequest,
     TTSAudioResponse,
@@ -47,6 +52,15 @@ from .helpers import entry_config, get_tts_entity, is_time_in_range
 _LOGGER = logging.getLogger(__name__)
 _STORAGE_VERSION = 1
 _POLICY_SNAPSHOT_PREFIX = "snapshot-v2:"
+_PREFERRED_OUTPUT_OPTIONS = frozenset(
+    {
+        ATTR_PREFERRED_FORMAT,
+        ATTR_PREFERRED_SAMPLE_RATE,
+        ATTR_PREFERRED_SAMPLE_CHANNELS,
+        ATTR_PREFERRED_SAMPLE_BYTES,
+        ATTR_PREFERRED_BITRATE,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,12 +315,18 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
     @property
     @override
     def supported_options(self) -> list[str] | None:
-        """Expose the underlying entity's supported option names."""
-        return (
-            list(self._underlying.supported_options)
-            if self._underlying and self._underlying.supported_options is not None
-            else None
-        )
+        """Expose provider options while leaving output conversion to Home Assistant."""
+        underlying = self._underlying
+        if underlying is None:
+            return None
+        supported_options = underlying.supported_options
+        if supported_options is None:
+            return None
+        return [
+            option
+            for option in supported_options
+            if option not in _PREFERRED_OUTPUT_OPTIONS
+        ]
 
     @property
     @override
@@ -498,19 +518,8 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
     @callback
     @override
     def async_supports_streaming_input(self) -> bool:
-        """Return whether the underlying provider supports streaming input."""
-        underlying = self._underlying
-        if underlying is None:
-            return False
-        try:
-            return bool(underlying.async_supports_streaming_input())
-        except Exception as err:
-            _LOGGER.warning(
-                "Could not read streaming capability for %s: %s",
-                self.underlying_entity_id,
-                err,
-            )
-            return False
+        """Return whether Adaptive TTS can accept streaming text input."""
+        return True
 
     def is_quiet_mode_active(self, now: datetime | None = None) -> bool:
         """Return whether the configured quiet policy is active."""

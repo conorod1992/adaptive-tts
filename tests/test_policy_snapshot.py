@@ -106,6 +106,9 @@ async def test_persistent_snapshot_survives_override_change_and_cache_matches_au
     async def internal_get(message, language, options):
         return await entity.async_get_tts_audio(message, language, options)
 
+    async def internal_stream(request):
+        return await entity.async_stream_tts_audio(request)
+
     with (
         patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
         patch(
@@ -113,6 +116,11 @@ async def test_persistent_snapshot_survives_override_change_and_cache_matches_au
             side_effect=engine_for_id,
         ),
         patch.object(entity, "async_internal_get_tts_audio", side_effect=internal_get),
+        patch.object(
+            entity,
+            "internal_async_stream_tts_audio",
+            side_effect=internal_stream,
+        ),
     ):
         await entity.async_set_voice_override(
             "en-US", "voice-a", DURATION_UNTIL_CHANGED
@@ -163,6 +171,9 @@ async def test_concurrent_prepared_streams_do_not_share_one_shot_cache_entry(
     async def internal_get(message, language, options):
         return await entity.async_get_tts_audio(message, language, options)
 
+    async def internal_stream(request):
+        return await entity.async_stream_tts_audio(request)
+
     with (
         patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
         patch(
@@ -170,6 +181,11 @@ async def test_concurrent_prepared_streams_do_not_share_one_shot_cache_entry(
             side_effect=engine_for_id,
         ),
         patch.object(entity, "async_internal_get_tts_audio", side_effect=internal_get),
+        patch.object(
+            entity,
+            "internal_async_stream_tts_audio",
+            side_effect=internal_stream,
+        ),
     ):
         await entity.async_set_voice_override("en-US", "voice-a", DURATION_NEXT_REQUEST)
         first = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
