@@ -74,15 +74,17 @@ def _language_selector(provider) -> selector.SelectSelector:
     )
 
 
+def _enumerated_voices(provider, language: str | None):
+    """Return provider voices, preserving None as 'cannot enumerate'."""
+    return provider.async_get_supported_voices(language or provider.default_language)
+
+
 def _override_selector(
     provider, option: str, language: str | None = None
 ) -> selector.SelectSelector | selector.TextSelector:
     """Build a voice dropdown when enumeration is available, else text input."""
     if option == "voice":
-        voices = (
-            provider.async_get_supported_voices(language or provider.default_language)
-            or []
-        )
+        voices = _enumerated_voices(provider, language)
         if voices:
             return selector.SelectSelector(
                 selector.SelectSelectorConfig(
@@ -93,12 +95,40 @@ def _override_selector(
                         for voice in voices
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
-                    custom_value=True,
+                    custom_value=False,
                 )
             )
     return selector.TextSelector(
         selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
     )
+
+
+def _override_error(
+    provider, option: str, language: str | None, value: str
+) -> str | None:
+    """Validate an override value when the provider exposes a finite voice list."""
+    if not value:
+        return "override_required"
+    if option != "voice":
+        return None
+    voices = _enumerated_voices(provider, language)
+    if voices is not None and value not in {voice.voice_id for voice in voices}:
+        return "unsupported_voice"
+    return None
+
+
+def _existing_override_default(
+    provider,
+    option: str,
+    language: str | None,
+    value: str,
+    *,
+    provider_changed: bool,
+) -> str:
+    """Return an existing value only when it remains valid for this provider."""
+    if provider_changed or not value:
+        return ""
+    return value if _override_error(provider, option, language, value) is None else ""
 
 
 class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -229,9 +259,15 @@ class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="provider_not_found")
         if user_input is not None:
             value = user_input[CONF_QUIET_VALUE].strip()
-            if not value:
-                errors[CONF_QUIET_VALUE] = "override_required"
-            if not errors:
+            error = _override_error(
+                provider,
+                self._pending[CONF_QUIET_OPTION],
+                self._pending.get(CONF_QUIET_LANGUAGE),
+                value,
+            )
+            if error is not None:
+                errors[CONF_QUIET_VALUE] = error
+            else:
                 self._pending[CONF_QUIET_VALUE] = value
                 return self._create_entry()
 
@@ -352,7 +388,11 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
         current_language = self._config.get(
             CONF_QUIET_LANGUAGE, provider.default_language
         )
-        if current_language not in provider.supported_languages:
+        provider_changed = (
+            self._pending[CONF_UNDERLYING_TTS_ENTITY]
+            != self._config[CONF_UNDERLYING_TTS_ENTITY]
+        )
+        if provider_changed or current_language not in provider.supported_languages:
             current_language = provider.default_language
 
         if user_input is not None:
@@ -391,23 +431,38 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
         provider = get_tts_entity(self.hass, self._pending[CONF_UNDERLYING_TTS_ENTITY])
         if provider is None:
             return self.async_abort(reason="provider_not_found")
+        option = self._pending[CONF_QUIET_OPTION]
+        language = self._pending.get(CONF_QUIET_LANGUAGE)
         if user_input is not None:
             value = user_input[CONF_QUIET_VALUE].strip()
-            if not value:
-                errors[CONF_QUIET_VALUE] = "override_required"
-            if not errors:
+            error = _override_error(provider, option, language, value)
+            if error is not None:
+                errors[CONF_QUIET_VALUE] = error
+            else:
                 self._pending[CONF_QUIET_VALUE] = value
                 return self.async_create_entry(title="", data=self._pending)
 
+        default_value = _existing_override_default(
+            provider,
+            option,
+            language,
+            self._config.get(CONF_QUIET_VALUE, ""),
+            provider_changed=(
+                self._pending[CONF_UNDERLYING_TTS_ENTITY]
+                != self._config[CONF_UNDERLYING_TTS_ENTITY]
+            ),
+        )
+        value_key = (
+            vol.Required(CONF_QUIET_VALUE, default=default_value)
+            if default_value
+            else vol.Required(CONF_QUIET_VALUE)
+        )
         schema = vol.Schema(
             {
-                vol.Required(
-                    CONF_QUIET_VALUE,
-                    default=self._config.get(CONF_QUIET_VALUE, ""),
-                ): _override_selector(
+                value_key: _override_selector(
                     provider,
-                    self._pending[CONF_QUIET_OPTION],
-                    self._pending.get(CONF_QUIET_LANGUAGE),
+                    option,
+                    language,
                 )
             }
         )
