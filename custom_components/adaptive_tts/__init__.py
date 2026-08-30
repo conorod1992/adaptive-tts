@@ -83,9 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     @callback
     def _async_underlying_state_changed(_event) -> None:
         """Publish wrapper availability when the provider state changes."""
-        entity = (
-            hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {}).get(entry.entry_id)
-        )
+        entity = hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {}).get(entry.entry_id)
         if entity is not None:
             entity.async_write_ha_state()
 
