@@ -269,6 +269,9 @@ async def test_manager_cache_separates_normal_and_quiet_policy(hass, tmp_path) -
     async def internal_get(message, language, options):
         return await entity.async_get_tts_audio(message, language, options)
 
+    async def internal_stream(request):
+        return await entity.async_stream_tts_audio(request)
+
     def engine_for_id(_hass, engine_id):
         return entity if engine_id == "tts.adaptive" else source
 
@@ -283,6 +286,11 @@ async def test_manager_cache_separates_normal_and_quiet_policy(hass, tmp_path) -
             side_effect=engine_for_id,
         ),
         patch.object(entity, "async_internal_get_tts_audio", side_effect=internal_get),
+        patch.object(
+            entity,
+            "internal_async_stream_tts_audio",
+            side_effect=internal_stream,
+        ),
     ):
         normal = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
         now[0] = datetime(2026, 8, 29, 23, 30)
