@@ -1,10 +1,10 @@
 """Regression tests for Adaptive TTS backend robustness."""
 
 import asyncio
+from importlib import import_module
 from unittest.mock import patch
 
 import pytest
-from homeassistant.components.tts import Voice
 from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -234,7 +234,7 @@ def test_websocket_engine_contains_broken_provider_metadata(hass) -> None:
         "custom_components.adaptive_tts.preview._engine_info",
         side_effect=RuntimeError("broken metadata"),
     ):
-        websocket_engine.__wrapped__.__wrapped__(
+        websocket_engine.__wrapped__(
             hass,
             connection,
             {"id": 9, "engine_id": "tts.broken"},
@@ -250,6 +250,7 @@ def test_websocket_info_skips_one_broken_provider(hass) -> None:
     hass.states.async_set("tts.good", "unknown")
     hass.states.async_set("tts.broken", "unknown")
     connection = FakeConnection()
+    assist_pipeline = import_module("homeassistant.components.assist_pipeline")
 
     def info(_hass, engine_id, _language):
         if engine_id == "tts.broken":
@@ -257,13 +258,10 @@ def test_websocket_info_skips_one_broken_provider(hass) -> None:
         return {"engine_id": engine_id}
 
     with (
-        patch(
-            "homeassistant.components.assist_pipeline.async_get_pipelines",
-            return_value=[],
-        ),
+        patch.object(assist_pipeline, "async_get_pipelines", return_value=[]),
         patch("custom_components.adaptive_tts.preview._engine_info", side_effect=info),
     ):
-        websocket_info.__wrapped__.__wrapped__(
+        websocket_info.__wrapped__(
             hass,
             connection,
             {"id": 10},
