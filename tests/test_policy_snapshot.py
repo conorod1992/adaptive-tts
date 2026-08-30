@@ -127,16 +127,12 @@ async def test_persistent_snapshot_survives_override_change_and_cache_matches_au
         first.async_set_message("Same text")
         first_audio = b"".join([chunk async for chunk in first.async_stream_result()])
         second.async_set_message("Same text")
-        second_audio = b"".join(
-            [chunk async for chunk in second.async_stream_result()]
-        )
+        second_audio = b"".join([chunk async for chunk in second.async_stream_result()])
 
         await entity.async_clear_voice_override(SCOPE_ALL)
         normal = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
         normal.async_set_message("Same text")
-        normal_audio = b"".join(
-            [chunk async for chunk in normal.async_stream_result()]
-        )
+        normal_audio = b"".join([chunk async for chunk in normal.async_stream_result()])
 
     assert first_audio == b"voice-a"
     assert second_audio == b"voice-b"
@@ -175,9 +171,7 @@ async def test_concurrent_prepared_streams_do_not_share_one_shot_cache_entry(
         ),
         patch.object(entity, "async_internal_get_tts_audio", side_effect=internal_get),
     ):
-        await entity.async_set_voice_override(
-            "en-US", "voice-a", DURATION_NEXT_REQUEST
-        )
+        await entity.async_set_voice_override("en-US", "voice-a", DURATION_NEXT_REQUEST)
         first = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
         second = ha_tts.async_create_stream(hass, "tts.adaptive", options={})
 
@@ -186,9 +180,7 @@ async def test_concurrent_prepared_streams_do_not_share_one_shot_cache_entry(
         first.async_set_message("Same text")
         first_audio = b"".join([chunk async for chunk in first.async_stream_result()])
         second.async_set_message("Same text")
-        second_audio = b"".join(
-            [chunk async for chunk in second.async_stream_result()]
-        )
+        second_audio = b"".join([chunk async for chunk in second.async_stream_result()])
 
     assert first_audio == b"voice-a"
     assert second_audio == b"normal"
@@ -249,12 +241,8 @@ def test_quiet_policy_snapshot_survives_config_change(hass) -> None:
         )
         new_policy = entity.default_options[CACHE_POLICY_OPTION]
 
-        old_request = entity.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: old_policy}
-        )
-        new_request = entity.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: new_policy}
-        )
+        old_request = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: old_policy})
+        new_request = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: new_policy})
 
     assert old_request.options["voice"] == "voice-a"
     assert new_request.options["voice"] == "voice-b"
@@ -288,12 +276,8 @@ async def test_provider_snapshot_survives_wrapped_provider_change(hass) -> None:
         )
         new_policy = entity.default_options[CACHE_POLICY_OPTION]
 
-        old_request = entity.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: old_policy}
-        )
-        new_request = entity.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: new_policy}
-        )
+        old_request = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: old_policy})
+        new_request = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: new_policy})
         _extension, old_audio = await entity.async_get_tts_audio(
             "Old provider", "en-US", {CACHE_POLICY_OPTION: old_policy}
         )
