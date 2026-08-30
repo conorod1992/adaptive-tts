@@ -175,9 +175,7 @@ async def test_prepared_stream_keeps_streaming_provider_after_provider_change(
         audio = b"".join([chunk async for chunk in prepared.async_stream_result()])
 
     assert audio == b"source-a"
-    assert source_a.stream_calls == [
-        ("Prepared request", "en-US", {"voice": "normal"})
-    ]
+    assert source_a.stream_calls == [("Prepared request", "en-US", {"voice": "normal"})]
     assert source_a.calls == []
     assert source_b.calls == []
 
