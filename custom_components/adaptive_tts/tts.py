@@ -357,7 +357,10 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         voice_override: VoiceOverride | None = None
 
         if "|" in value:
-            state, marker, _digest = value.split("|", 2)
+            parts = value.split("|", 2)
+            if len(parts) != 3:
+                raise HomeAssistantError("Invalid Adaptive TTS policy snapshot")
+            state, marker, _digest = parts
             quiet_active = state == "quiet"
             if marker.startswith("next:"):
                 token = marker.partition(":")[2]
@@ -413,10 +416,18 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
     @override
     def async_supports_streaming_input(self) -> bool:
         """Return whether the underlying provider supports streaming input."""
-        return bool(
-            (underlying := self._underlying)
-            and underlying.async_supports_streaming_input()
-        )
+        underlying = self._underlying
+        if underlying is None:
+            return False
+        try:
+            return bool(underlying.async_supports_streaming_input())
+        except Exception as err:
+            _LOGGER.warning(
+                "Could not read streaming capability for %s: %s",
+                self.underlying_entity_id,
+                err,
+            )
+            return False
 
     def is_quiet_mode_active(self, now: datetime | None = None) -> bool:
         """Return whether the configured quiet policy is active."""
@@ -722,7 +733,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 f"Underlying TTS entity {resolved.underlying_entity_id} disappeared"
             )
         try:
-            return await underlying.async_get_tts_audio(
+            extension, data = await underlying.async_get_tts_audio(
                 message, resolved.language, resolved.options
             )
         except HomeAssistantError:
@@ -742,6 +753,14 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(
                 f"TTS generation failed in {resolved.underlying_entity_id}: {err}"
             ) from err
+        if not extension or not data:
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
+            raise HomeAssistantError(
+                f"No TTS audio returned by {resolved.underlying_entity_id}"
+            )
+        return extension, data
 
     @override
     async def async_stream_tts_audio(
@@ -759,7 +778,23 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(
                 f"Underlying TTS entity {resolved.underlying_entity_id} disappeared"
             )
-        if underlying.async_supports_streaming_input():
+        try:
+            supports_streaming = underlying.async_supports_streaming_input()
+        except HomeAssistantError:
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
+            raise
+        except Exception as err:
+            await self._async_clear_failed_voice_override(
+                resolved.voice_override, resolved.voice_override_scope
+            )
+            raise HomeAssistantError(
+                f"Could not read TTS streaming capability from "
+                f"{resolved.underlying_entity_id}: {err}"
+            ) from err
+
+        if supports_streaming:
             try:
                 response = await underlying.async_stream_tts_audio(
                     TTSAudioRequest(
@@ -785,15 +820,33 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                     f"{resolved.underlying_entity_id}: {err}"
                 ) from err
 
+            if not response.extension:
+                await self._async_clear_failed_voice_override(
+                    resolved.voice_override, resolved.voice_override_scope
+                )
+                raise HomeAssistantError(
+                    f"No TTS audio returned by {resolved.underlying_entity_id}"
+                )
+
             async def guarded_data_gen():
+                has_audio = False
                 try:
                     async for chunk in response.data_gen:
+                        if chunk:
+                            has_audio = True
                         yield chunk
                 except Exception:
                     await self._async_clear_failed_voice_override(
                         resolved.voice_override, resolved.voice_override_scope
                     )
                     raise
+                if not has_audio:
+                    await self._async_clear_failed_voice_override(
+                        resolved.voice_override, resolved.voice_override_scope
+                    )
+                    raise HomeAssistantError(
+                        f"No TTS audio returned by {resolved.underlying_entity_id}"
+                    )
 
             return TTSAudioResponse(response.extension, guarded_data_gen())
 
@@ -819,7 +872,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(
                 f"TTS generation failed in {resolved.underlying_entity_id}: {err}"
             ) from err
-        if extension is None or data is None:
+        if not extension or not data:
             await self._async_clear_failed_voice_override(
                 resolved.voice_override, resolved.voice_override_scope
             )
