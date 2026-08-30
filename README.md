@@ -196,14 +196,19 @@ network access, rate limits, and API costs all continue to apply. Adaptive TTS
 does not provide voices of its own.
 
 At runtime, a configured quiet option is checked against the provider's current
-`supported_options`. A `voice` override is also checked against
-`async_get_supported_voices` when the provider supplies a list. If a capability
-or voice disappears, synthesis fails with a useful Home Assistant error rather
-than silently sending a stale override. Providers that do not enumerate valid
-values for a non-voice option can only be validated by the provider itself.
-Providers that signal synthesis failure by returning no audio, or by ending a
-stream without yielding audio, are also treated as failures so explicit
-override recovery remains consistent.
+`supported_options`. A quiet-hours `voice` is also checked against
+`async_get_supported_voices` when the provider supplies a list. If an optional
+quiet-hours capability, language, or voice disappears, Adaptive TTS logs the
+problem and falls back to the normal provider settings for that request instead
+of breaking otherwise-valid speech. Explicit voice overrides remain strict: an
+invalid explicit override fails clearly and is cleared so it cannot poison later
+requests. Providers that do not enumerate valid values for a non-voice option
+can only be validated by the provider itself.
+
+Underlying provider output is also validated before Adaptive TTS returns it to
+Home Assistant. Missing audio, malformed one-shot results, malformed streaming
+responses, non-byte stream chunks, and provider exceptions are treated as TTS
+failures and follow the same explicit-override recovery path.
 
 Home Assistant forms its normal non-streaming cache identity before invoking a
 TTS entity. Adaptive TTS contributes a private, self-contained policy snapshot
