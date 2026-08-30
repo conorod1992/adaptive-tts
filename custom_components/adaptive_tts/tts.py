@@ -530,16 +530,24 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             return override
         return None
 
+    def _clear_matching_next_voice_override(
+        self, override: VoiceOverride | None
+    ) -> None:
+        """Clear a matching one-shot override while the override lock is held."""
+        if override is None or override.token is None:
+            return
+        pending = self._next_voice_override
+        if pending is not None and pending.token == override.token:
+            self._next_voice_override = None
+
     async def _async_consume_next_voice_override(
         self, override: VoiceOverride | None, scope: str | None
     ) -> None:
         """Consume a matching one-shot override when synthesis actually starts."""
-        if scope != SCOPE_NEXT_REQUEST or override is None or override.token is None:
+        if scope != SCOPE_NEXT_REQUEST:
             return
         async with self._override_lock:
-            pending = self._next_voice_override
-            if pending is not None and pending.token == override.token:
-                self._next_voice_override = None
+            self._clear_matching_next_voice_override(override)
 
     async def _async_clear_failed_voice_override(
         self, override: VoiceOverride | None, scope: str | None
@@ -702,21 +710,35 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
     ) -> ResolvedRequest:
         """Resolve a synthesis request and clear a failing explicit override."""
         snapshot = self._policy_snapshot_from_options(options)
+
+        # A next-request override must be claimed atomically. Otherwise two
+        # synthesis tasks can both resolve the same pending token while another
+        # override mutation holds this lock, then both use the supposedly
+        # one-shot voice after the lock becomes available.
+        if snapshot.override_scope == SCOPE_NEXT_REQUEST:
+            async with self._override_lock:
+                request_override = self._override_from_snapshot(snapshot)
+                try:
+                    resolved = self._resolve_request_with_snapshot(
+                        language, options, snapshot
+                    )
+                except Exception:
+                    self._clear_matching_next_voice_override(request_override)
+                    raise
+                self._clear_matching_next_voice_override(resolved.voice_override)
+                return resolved
+
         request_override = self._override_from_snapshot(snapshot)
         request_scope = (
             snapshot.override_scope if request_override is not None else None
         )
         try:
-            resolved = self._resolve_request_with_snapshot(language, options, snapshot)
+            return self._resolve_request_with_snapshot(language, options, snapshot)
         except Exception:
             await self._async_clear_failed_voice_override(
                 request_override, request_scope
             )
             raise
-        await self._async_consume_next_voice_override(
-            resolved.voice_override, resolved.voice_override_scope
-        )
-        return resolved
 
     @override
     async def async_get_tts_audio(
