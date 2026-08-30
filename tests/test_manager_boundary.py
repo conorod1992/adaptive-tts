@@ -54,7 +54,9 @@ class StreamingManagerTTS(ManagerTTS):
     async def async_get_tts_audio(self, message, language, options):
         raise HomeAssistantError("streaming provider used one-shot path")
 
-    async def async_stream_tts_audio(self, request: TTSAudioRequest) -> TTSAudioResponse:
+    async def async_stream_tts_audio(
+        self, request: TTSAudioRequest
+    ) -> TTSAudioResponse:
         message = "".join([chunk async for chunk in request.message_gen])
         self.stream_calls.append((message, request.language, dict(request.options)))
 
