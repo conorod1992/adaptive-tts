@@ -124,6 +124,7 @@ function engineInfo(engineId, language = "en-US") {
     default_options: {},
     voices: [],
     voices_enumerated: true,
+    available: true,
   };
 }
 
@@ -340,4 +341,74 @@ test("non-enumerable providers get a free-text voice control", () => {
   const voice = panel._replaceVoiceControl("voice", [], false, true);
   assert.equal(voice.tagName, "INPUT");
   assert.equal(voice.type, "text");
+});
+
+
+test("initial load prefers an available TTS entity", async () => {
+  const panel = panelWith([
+    "pipeline", "engine", "language", "voice", "override-engine",
+    "override-language", "override-voice", "options", "set-override",
+    "clear-override", "generate", "error", "override-error", "override-success",
+    "result", "audio",
+  ]);
+  panel._hass = {
+    async callWS() {
+      return {
+        pipelines: [],
+        engines: [
+          { engine_id: "tts.offline", name: "Offline", is_adaptive: false, available: false },
+          { engine_id: "tts.ready", name: "Ready", is_adaptive: false, available: true },
+        ],
+      };
+    },
+  };
+  panel._engineChanged = async () => {};
+
+  await panel._load();
+
+  const engine = panel.shadowRoot.getElementById("engine");
+  assert.equal(engine.value, "tts.ready");
+  assert.match(engine.options[0].textContent, /unavailable/);
+});
+
+test("unavailable TTS metadata keeps preview generation disabled", async () => {
+  const panel = panelWith([
+    "engine", "language", "voice", "voice-label", "options", "generate",
+    "error", "result", "audio", "override-engine", "override-language",
+    "override-voice", "set-override", "clear-override",
+  ]);
+  panel.shadowRoot.getElementById("engine").value = "tts.offline";
+  panel._hass = {
+    states: { "tts.offline": { state: "unavailable" } },
+    async callWS() {
+      return { ...engineInfo("tts.offline"), available: false };
+    },
+  };
+
+  await panel._engineChanged();
+
+  assert.equal(panel.shadowRoot.getElementById("generate").disabled, true);
+  assert.match(panel.shadowRoot.getElementById("error").textContent, /currently unavailable/);
+  assert.equal(panel.shadowRoot.getElementById("language").options.length, 0);
+});
+
+test("unavailable Adaptive TTS still allows clearing an override", async () => {
+  const panel = panelWith([
+    "engine", "language", "voice", "options", "generate", "override-engine",
+    "override-language", "override-voice", "set-override", "clear-override",
+    "override-error", "override-success", "result", "audio",
+  ]);
+  panel.shadowRoot.getElementById("override-engine").value = "tts.adaptive";
+  panel._hass = {
+    states: { "tts.adaptive": { state: "unavailable" } },
+    async callWS() {
+      return { ...engineInfo("tts.adaptive"), available: false };
+    },
+  };
+
+  await panel._overrideEngineChanged();
+
+  assert.equal(panel.shadowRoot.getElementById("set-override").disabled, true);
+  assert.equal(panel.shadowRoot.getElementById("clear-override").disabled, false);
+  assert.match(panel.shadowRoot.getElementById("override-error").textContent, /still clear/);
 });

@@ -29,7 +29,7 @@ from custom_components.adaptive_tts.tts import (
     async_remove_voice_override_storage,
 )
 
-from .test_preview import FakeConnection, FakeStream
+from .test_preview import FakeConnection
 from .test_tts import MockTTS
 
 
@@ -208,14 +208,12 @@ def test_multi_target_validation_happens_before_mutation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preview_deletes_stream_when_preflight_fails(hass) -> None:
-    """A stream created before provider preflight is eagerly cleaned on failure."""
-    stream = FakeStream()
+async def test_preview_rejects_missing_provider_before_stream_allocation(hass) -> None:
+    """Provider preflight fails before a temporary stream is allocated."""
     with (
         patch(
-            "custom_components.adaptive_tts.preview.tts.async_create_stream",
-            return_value=stream,
-        ),
+            "custom_components.adaptive_tts.preview.tts.async_create_stream"
+        ) as create_stream,
         patch(
             "custom_components.adaptive_tts.preview.get_engine_instance",
             return_value=None,
@@ -227,7 +225,7 @@ async def test_preview_deletes_stream_when_preflight_fails(hass) -> None:
             {"engine_id": "tts.missing", "message": "test", "options": {}},
         )
 
-    assert stream.deleted is True
+    create_stream.assert_not_called()
 
 
 def test_websocket_engine_contains_broken_provider_metadata(hass) -> None:

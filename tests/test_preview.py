@@ -4,8 +4,13 @@ from typing import ClassVar
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.adaptive_tts.preview import create_preview, websocket_generate
+from custom_components.adaptive_tts.preview import (
+    _engine_info,
+    create_preview,
+    websocket_generate,
+)
 
 from .test_tts import MockTTS
 
@@ -173,3 +178,73 @@ def test_frontend_clears_stale_results_and_handles_audio_errors() -> None:
     assert "this._clearResult();" in panel
     assert 'addEventListener("error"' in panel
     assert "Preview audio could not be retrieved" in panel
+
+
+def test_unavailable_provider_metadata_skips_voice_probe(hass) -> None:
+    """Unavailable providers remain visible without probing optional voice metadata."""
+
+    class UnavailableTTS(MockTTS):
+        _attr_available = False
+
+        def async_get_supported_voices(self, language):
+            raise AssertionError("voice metadata must not be queried while unavailable")
+
+    source = UnavailableTTS()
+    source.hass = hass
+    with patch(
+        "custom_components.adaptive_tts.preview.get_engine_instance",
+        return_value=source,
+    ):
+        info = _engine_info(hass, "tts.source", "en-US")
+
+    assert info["available"] is False
+    assert info["voices"] == []
+    assert info["voices_enumerated"] is False
+
+
+def test_voice_metadata_failure_does_not_hide_provider(hass) -> None:
+    """A broken optional voice catalogue degrades to free-text voice metadata."""
+    source = MockTTS()
+    source.hass = hass
+    with (
+        patch(
+            "custom_components.adaptive_tts.preview.get_engine_instance",
+            return_value=source,
+        ),
+        patch.object(
+            source,
+            "async_get_supported_voices",
+            side_effect=RuntimeError("voice catalogue offline"),
+        ),
+    ):
+        info = _engine_info(hass, "tts.source", "en-US")
+
+    assert info["available"] is True
+    assert info["voices"] == []
+    assert info["voices_enumerated"] is False
+
+
+@pytest.mark.asyncio
+async def test_preview_rejects_unavailable_provider_before_allocating_stream(
+    hass,
+) -> None:
+    """Unavailable providers fail before Home Assistant registers a preview stream."""
+    source = MockTTS()
+    source._attr_available = False
+    source.hass = hass
+    with (
+        patch(
+            "custom_components.adaptive_tts.preview.get_engine_instance",
+            return_value=source,
+        ),
+        patch(
+            "custom_components.adaptive_tts.preview.tts.async_create_stream"
+        ) as create_stream,
+    ):
+        with pytest.raises(HomeAssistantError, match="currently unavailable"):
+            await create_preview(
+                hass,
+                {"engine_id": "tts.source", "message": "test", "options": {}},
+            )
+
+    create_stream.assert_not_called()
