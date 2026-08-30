@@ -65,6 +65,17 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
     }
 
 
+def _engine_infos(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Return provider metadata while isolating failures to one provider."""
+    engines = []
+    for engine_id in hass.states.async_entity_ids("tts"):
+        try:
+            engines.append(_engine_info(hass, engine_id, None))
+        except Exception as err:
+            _LOGGER.warning("Skipping broken TTS provider %s: %s", engine_id, err)
+    return engines
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): "adaptive_tts/info"})
 @callback
@@ -88,13 +99,9 @@ def websocket_info(
         }
         for pipeline in assist_pipeline.async_get_pipelines(hass)
     ]
-    engines = []
-    for engine_id in hass.states.async_entity_ids("tts"):
-        try:
-            engines.append(_engine_info(hass, engine_id, None))
-        except Exception as err:
-            _LOGGER.warning("Skipping broken TTS provider %s: %s", engine_id, err)
-    connection.send_result(msg["id"], {"pipelines": pipelines, "engines": engines})
+    connection.send_result(
+        msg["id"], {"pipelines": pipelines, "engines": _engine_infos(hass)}
+    )
 
 
 @websocket_api.require_admin
