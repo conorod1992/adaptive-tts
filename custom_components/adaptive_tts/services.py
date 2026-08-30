@@ -85,6 +85,12 @@ def _resolve_entities(hass: HomeAssistant, entity_ids: Iterable[str]):
     return resolved
 
 
+def _validate_voice_override_targets(entities, language: str, voice: str) -> None:
+    """Validate all targets before mutating any target."""
+    for entity in entities:
+        entity.validate_voice_override(language, voice)
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     """Register Adaptive TTS actions."""
 
@@ -93,6 +99,7 @@ def async_register_services(hass: HomeAssistant) -> None:
         language = call.data[ATTR_LANGUAGE]
         voice = call.data[ATTR_VOICE]
         duration = call.data[ATTR_DURATION]
+        _validate_voice_override_targets(entities, language, voice)
         for entity in entities:
             await entity.async_set_voice_override(language, voice, duration)
 

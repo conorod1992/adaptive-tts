@@ -26,6 +26,7 @@ from .const import (
 from .helpers import entry_config, is_adaptive_entity
 from .preview import async_register_websocket_commands
 from .services import async_register_services
+from .tts import async_remove_voice_override_storage
 
 PLATFORMS = [Platform.TTS]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -86,6 +87,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unloaded:
         hass.data[DOMAIN][DATA_ENTITIES].pop(entry.entry_id, None)
     return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove storage owned by a permanently deleted config entry."""
+    await async_remove_voice_override_storage(hass, entry)
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

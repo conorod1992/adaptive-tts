@@ -29,7 +29,7 @@
       },
       "override": {
         "title": "Configure the quiet override",
-        "description": "Choose a listed voice when available, or enter the provider's exact voice/style value.",
+        "description": "Choose a listed voice when the provider supplies a voice list. Providers that cannot enumerate voices allow an exact voice/style value instead.",
         "data": {
           "quiet_value": "Quiet voice/style value"
         }
@@ -40,6 +40,7 @@
       "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
       "unsupported_option": "The selected option is not supported by this provider.",
       "unsupported_language": "The selected language is not supported by this provider.",
+      "unsupported_voice": "The selected voice is not available for this provider and language.",
       "override_required": "Enter a quiet voice/style value."
     },
     "abort": {
@@ -73,7 +74,7 @@
       },
       "override": {
         "title": "Update the quiet override",
-        "description": "Choose a listed voice when available, or enter the provider's exact voice/style value.",
+        "description": "Choose a listed voice when the provider supplies a voice list. Providers that cannot enumerate voices allow an exact voice/style value instead.",
         "data": {
           "quiet_value": "Quiet voice/style value"
         }
@@ -84,6 +85,7 @@
       "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
       "unsupported_option": "The selected option is not supported by this provider.",
       "unsupported_language": "The selected language is not supported by this provider.",
+      "unsupported_voice": "The selected voice is not available for this provider and language.",
       "override_required": "Enter a quiet voice/style value."
     },
     "abort": {
