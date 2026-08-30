@@ -158,8 +158,21 @@ async def async_setup_entry(
     """Set up an Adaptive TTS entity."""
     entity = AdaptiveTTSEntity(entry)
     await entity.async_load_voice_override(hass)
-    hass.data[DOMAIN][DATA_ENTITIES][entry.entry_id] = entity
-    async_add_entities([entity])
+    entities = hass.data[DOMAIN][DATA_ENTITIES]
+    entities[entry.entry_id] = entity
+
+    @callback
+    def _remove_from_service_map() -> None:
+        """Drop rejected or removed entities from the service lookup."""
+        if entities.get(entry.entry_id) is entity:
+            entities.pop(entry.entry_id, None)
+
+    entity.async_on_remove(_remove_from_service_map)
+    try:
+        async_add_entities([entity])
+    except Exception:
+        _remove_from_service_map()
+        raise
 
 
 class AdaptiveTTSEntity(TextToSpeechEntity):
@@ -214,7 +227,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         stored_provider = stored.get("underlying_entity_id")
         if (
             not isinstance(voice, str)
-            or not voice
+            or not voice.strip()
             or not (language is None or isinstance(language, str))
             or not (token is None or isinstance(token, str))
             or not (stored_provider is None or isinstance(stored_provider, str))
@@ -275,6 +288,14 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 reason,
                 err,
             )
+            try:
+                await self._override_store.async_save({})
+            except Exception as save_err:
+                _LOGGER.error(
+                    "Could not neutralize discarded override for %s: %s",
+                    self._entry.entry_id,
+                    save_err,
+                )
 
     @property
     def persistent_voice_override(self) -> VoiceOverride | None:
@@ -560,6 +581,14 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         self, language: str | None, voice: str
     ) -> VoiceOverride:
         """Validate an explicit voice override against the wrapped provider."""
+        if not isinstance(voice, str) or not voice.strip():
+            raise HomeAssistantError("Voice override must not be empty")
+        voice = voice.strip()
+        if language is not None:
+            if not isinstance(language, str) or not language.strip():
+                raise HomeAssistantError("Voice override language must not be empty")
+            language = language.strip()
+
         underlying = self._underlying
         if underlying is None or not underlying.available:
             raise HomeAssistantError(

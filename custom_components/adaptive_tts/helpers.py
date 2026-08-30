@@ -11,12 +11,20 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN
+from .const import (
+    CONF_QUIET_LANGUAGE,
+    CONF_QUIET_MODE,
+    CONF_QUIET_OPTION,
+    DOMAIN,
+)
 
 
 def entry_config(entry: ConfigEntry) -> dict[str, Any]:
-    """Return config entry data with options applied."""
-    return {**entry.data, **entry.options}
+    """Return canonical config entry data with options applied."""
+    config = {**entry.data, **entry.options}
+    if not config.get(CONF_QUIET_MODE) or config.get(CONF_QUIET_OPTION) != "voice":
+        config.pop(CONF_QUIET_LANGUAGE, None)
+    return config
 
 
 def parse_time(value: str | time) -> time:
