@@ -32,11 +32,20 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _non_empty_string(value) -> str:
+    """Normalize a required text value and reject blank input."""
+    text = cv.string(value).strip()
+    if not text:
+        raise vol.Invalid("value must not be empty")
+    return text
+
+
 _SET_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
-        vol.Required(ATTR_LANGUAGE): cv.string,
-        vol.Required(ATTR_VOICE): cv.string,
+        vol.Required(ATTR_LANGUAGE): _non_empty_string,
+        vol.Required(ATTR_VOICE): _non_empty_string,
         vol.Optional(ATTR_DURATION, default=DURATION_NEXT_REQUEST): vol.In(
             (DURATION_NEXT_REQUEST, DURATION_UNTIL_CHANGED)
         ),
