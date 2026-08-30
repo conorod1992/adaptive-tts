@@ -10,6 +10,7 @@ from homeassistant.helpers import selector
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.adaptive_tts.config_flow import (
+    _existing_override_default,
     _override_error,
     _override_selector,
 )
@@ -54,11 +55,47 @@ def test_override_falls_back_to_text_without_enumerated_voices() -> None:
     assert isinstance(_override_selector(MockTTS(), "style"), selector.TextSelector)
 
 
-def test_empty_voice_list_rejects_arbitrary_voice() -> None:
-    """An explicit empty voice list means no voice IDs are valid."""
+def test_empty_voice_list_is_an_empty_finite_selector() -> None:
+    """An explicit empty list never becomes an arbitrary free-text voice field."""
     source = MockTTS()
     source.async_get_supported_voices = lambda language: []
+    voice_selector = _override_selector(source, "voice", "en-GB")
+    assert isinstance(voice_selector, selector.SelectSelector)
+    assert voice_selector.config["options"] == []
+    assert voice_selector.config["custom_value"] is False
     assert _override_error(source, "voice", "en-GB", "made-up") == "unsupported_voice"
+
+
+def test_changed_override_option_does_not_reuse_old_value() -> None:
+    """A voice ID cannot silently become the default for a different option."""
+    source = MockTTS()
+    assert (
+        _existing_override_default(
+            source,
+            "style",
+            None,
+            "whisper",
+            provider_changed=False,
+            option_changed=True,
+        )
+        == ""
+    )
+
+
+def test_unchanged_override_option_keeps_valid_value() -> None:
+    """An unchanged policy still preserves a valid existing override."""
+    source = MockTTS()
+    assert (
+        _existing_override_default(
+            source,
+            "voice",
+            "en-US",
+            "whisper",
+            provider_changed=False,
+            option_changed=False,
+        )
+        == "whisper"
+    )
 
 
 @pytest.mark.asyncio
