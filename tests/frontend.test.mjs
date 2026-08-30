@@ -115,6 +115,18 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function engineInfo(engineId, language = "en-US") {
+  return {
+    engine_id: engineId,
+    supported_languages: [language],
+    default_language: language,
+    supported_options: [],
+    default_options: {},
+    voices: [],
+    voices_enumerated: true,
+  };
+}
+
 test("failed initial load is retryable", async () => {
   const panel = panelWith([
     "pipeline", "engine", "language", "voice", "override-engine",
@@ -146,6 +158,39 @@ test("failed initial load is retryable", async () => {
     panel.shadowRoot.getElementById("engine").options.map((item) => item.value),
     ["tts.source"],
   );
+});
+
+test("initial engine metadata failure keeps the whole load retryable", async () => {
+  const panel = panelWith([
+    "pipeline", "engine", "language", "voice", "voice-label", "override-engine",
+    "override-language", "override-voice", "options", "set-override",
+    "clear-override", "generate", "error", "override-error", "override-success",
+    "result", "audio",
+  ]);
+  let metadataAttempts = 0;
+  panel._hass = {
+    async callWS(message) {
+      if (message.type === "adaptive_tts/info") {
+        return {
+          pipelines: [],
+          engines: [{ engine_id: "tts.source", name: "Source", is_adaptive: false }],
+        };
+      }
+      metadataAttempts += 1;
+      if (metadataAttempts === 1) throw new Error("metadata unavailable");
+      return engineInfo("tts.source");
+    },
+  };
+
+  await panel._load();
+  assert.equal(panel._loaded, false);
+  assert.equal(panel._loading, false);
+  assert.match(panel.shadowRoot.getElementById("error").textContent, /metadata unavailable/);
+
+  await panel._load();
+  assert.equal(panel._loaded, true);
+  assert.equal(panel._loading, false);
+  assert.equal(metadataAttempts, 3);
 });
 
 test("late engine metadata cannot overwrite a newer selection", async () => {
@@ -223,6 +268,46 @@ test("late language metadata cannot overwrite newer voices", async () => {
     panel.shadowRoot.getElementById("override-voice").options.map((item) => item.value),
     ["british"],
   );
+});
+
+test("stale preview generation cannot overwrite a newer selection", async () => {
+  const panel = panelWith([
+    "engine", "language", "voice", "voice-label", "options", "message", "generate",
+    "error", "result", "audio", "used-engine", "used-underlying", "used-language",
+    "used-options", "used-quiet",
+  ]);
+  const generation = deferred();
+  panel._hass = {
+    callWS(message) {
+      if (message.type === "adaptive_tts/generate") return generation.promise;
+      return Promise.resolve(
+        engineInfo(message.engine_id, message.language || "en-GB"),
+      );
+    },
+  };
+  panel.shadowRoot.getElementById("engine").value = "tts.first";
+  panel.shadowRoot.getElementById("language").value = "en-US";
+  panel.shadowRoot.getElementById("message").value = "Test";
+  panel._engineInfo = engineInfo("tts.first", "en-US");
+  panel._engineInfoLanguage = "en-US";
+
+  const oldGeneration = panel._generate();
+  panel.shadowRoot.getElementById("engine").value = "tts.second";
+  await panel._engineChanged();
+
+  generation.resolve({
+    url: "/api/tts_proxy/old.mp3",
+    engine_id: "tts.first",
+    underlying_entity_id: "tts.source",
+    language: "en-US",
+    options: {},
+    quiet_mode_active: false,
+  });
+  await oldGeneration;
+
+  assert.equal(panel.shadowRoot.getElementById("result").style.display, "none");
+  assert.equal(panel.shadowRoot.getElementById("used-engine").textContent, "");
+  assert.equal(panel._engineInfo.engine_id, "tts.second");
 });
 
 test("provider option controls preserve known value types", () => {

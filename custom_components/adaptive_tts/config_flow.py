@@ -82,10 +82,10 @@ def _enumerated_voices(provider, language: str | None):
 def _override_selector(
     provider, option: str, language: str | None = None
 ) -> selector.SelectSelector | selector.TextSelector:
-    """Build a voice dropdown when enumeration is available, else text input."""
+    """Build a finite voice dropdown when available, else a text input."""
     if option == "voice":
         voices = _enumerated_voices(provider, language)
-        if voices:
+        if voices is not None:
             return selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
@@ -124,9 +124,10 @@ def _existing_override_default(
     value: str,
     *,
     provider_changed: bool,
+    option_changed: bool,
 ) -> str:
-    """Return an existing value only when it remains valid for this provider."""
-    if provider_changed or not value:
+    """Return an existing value only when its provider and meaning are unchanged."""
+    if provider_changed or option_changed or not value:
         return ""
     return value if _override_error(provider, option, language, value) is None else ""
 
@@ -451,6 +452,7 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
                 self._pending[CONF_UNDERLYING_TTS_ENTITY]
                 != self._config[CONF_UNDERLYING_TTS_ENTITY]
             ),
+            option_changed=option != self._config.get(CONF_QUIET_OPTION),
         )
         value_key = (
             vol.Required(CONF_QUIET_VALUE, default=default_value)

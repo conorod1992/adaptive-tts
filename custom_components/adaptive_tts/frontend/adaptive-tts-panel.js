@@ -186,6 +186,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     this._languageRequestId = (this._languageRequestId || 0) + 1;
     this._overrideEngineRequestId = (this._overrideEngineRequestId || 0) + 1;
     this._overrideLanguageRequestId = (this._overrideLanguageRequestId || 0) + 1;
+    this._generationRequestId = (this._generationRequestId || 0) + 1;
 
     const pipeline = this.shadowRoot.getElementById("pipeline");
     pipeline.replaceChildren();
@@ -197,6 +198,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     this.shadowRoot.getElementById("set-override").disabled = true;
     this.shadowRoot.getElementById("clear-override").disabled = true;
     this.shadowRoot.getElementById("generate").disabled = true;
+    this._clearResult();
     this._clearError();
     this._clearOverrideMessages();
   }
@@ -213,6 +215,19 @@ class AdaptiveTtsPanel extends HTMLElement {
       this[counterName] === requestId &&
       this.shadowRoot.getElementById(selectId).value === expectedValue
     );
+  }
+
+  _generationIsCurrent(requestId, engineId, language) {
+    return (
+      this._generationRequestId === requestId &&
+      this.shadowRoot.getElementById("engine").value === engineId &&
+      this.shadowRoot.getElementById("language").value === language
+    );
+  }
+
+  _invalidateGeneration() {
+    this._generationRequestId = (this._generationRequestId || 0) + 1;
+    this._clearResult();
   }
 
   async _overrideEngineChanged() {
@@ -239,6 +254,7 @@ class AdaptiveTtsPanel extends HTMLElement {
       await this._overrideLanguageChanged();
     } catch (err) {
       if (this._requestIsCurrent("_overrideEngineRequestId", requestId, "override-engine", engineId)) {
+        if (this._loading) throw err;
         this._showOverrideError(err);
       }
     }
@@ -274,6 +290,7 @@ class AdaptiveTtsPanel extends HTMLElement {
       }
     } catch (err) {
       if (this._requestIsCurrent("_overrideLanguageRequestId", requestId, "override-language", language)) {
+        if (this._loading) throw err;
         this._showOverrideError(err);
       }
     }
@@ -356,6 +373,7 @@ class AdaptiveTtsPanel extends HTMLElement {
 
   async _engineChanged(preferredLanguage, preferredVoice) {
     this._clearError();
+    this._invalidateGeneration();
     this._engineInfo = null;
     this._engineInfoLanguage = null;
     this._languageRequestId = (this._languageRequestId || 0) + 1;
@@ -376,12 +394,14 @@ class AdaptiveTtsPanel extends HTMLElement {
       await this._languageChanged(preferredVoice);
     } catch (err) {
       if (this._requestIsCurrent("_engineRequestId", requestId, "engine", engineId)) {
+        if (this._loading) throw err;
         this._showError(err);
       }
     }
   }
 
   async _languageChanged(preferredVoice) {
+    this._invalidateGeneration();
     this._engineInfo = null;
     this._engineInfoLanguage = null;
     const requestId = (this._languageRequestId || 0) + 1;
@@ -417,6 +437,7 @@ class AdaptiveTtsPanel extends HTMLElement {
       generate.disabled = false;
     } catch (err) {
       if (this._requestIsCurrent("_languageRequestId", requestId, "language", language)) {
+        if (this._loading) throw err;
         this._showError(err);
       }
     }
@@ -483,9 +504,11 @@ class AdaptiveTtsPanel extends HTMLElement {
     this._clearResult();
     const button = this.shadowRoot.getElementById("generate");
     button.disabled = true;
+    const requestId = (this._generationRequestId || 0) + 1;
+    this._generationRequestId = requestId;
+    const engineId = this.shadowRoot.getElementById("engine").value;
+    const language = this.shadowRoot.getElementById("language").value;
     try {
-      const engineId = this.shadowRoot.getElementById("engine").value;
-      const language = this.shadowRoot.getElementById("language").value;
       if (!this._engineInfo || this._engineInfoLanguage !== language) {
         throw new Error("Provider details are still loading. Try again in a moment.");
       }
@@ -505,6 +528,7 @@ class AdaptiveTtsPanel extends HTMLElement {
         options,
         message: this.shadowRoot.getElementById("message").value,
       });
+      if (!this._generationIsCurrent(requestId, engineId, language)) return;
       const audio = this.shadowRoot.getElementById("audio");
       audio.src = result.url;
       audio.load();
@@ -515,10 +539,15 @@ class AdaptiveTtsPanel extends HTMLElement {
       this.shadowRoot.getElementById("used-quiet").textContent = result.quiet_mode_active ? "Yes" : "No";
       this.shadowRoot.getElementById("result").style.display = "block";
     } catch (err) {
-      this._clearResult();
-      this._showError(err);
+      if (this._generationIsCurrent(requestId, engineId, language)) {
+        this._clearResult();
+        this._showError(err);
+      }
     } finally {
-      button.disabled = !this._engineInfo;
+      if (this._generationIsCurrent(requestId, engineId, language)) {
+        button.disabled =
+          !this._engineInfo || this._engineInfoLanguage !== language;
+      }
     }
   }
 

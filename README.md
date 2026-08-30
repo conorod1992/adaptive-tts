@@ -1,9 +1,9 @@
 # Adaptive TTS
 
 Adaptive TTS is a Home Assistant custom integration that creates a TTS entity
-which wraps another TTS entity. It can change provider options at synthesis
-time—initially for quiet-hours behavior and explicit voice overrides—then
-returns the provider's audio to Home Assistant unchanged.
+which wraps another TTS entity. It captures the applicable provider options and
+Adaptive TTS policy when Home Assistant prepares each TTS request, then uses
+that same snapshot during synthesis.
 
 It is useful when the same Assist pipeline or automation should keep using one
 TTS entity while its presentation changes by policy. A typical setup uses the
@@ -75,14 +75,19 @@ To change the provider or quiet-hours policy later, open the Adaptive TTS
 integration entry and choose **Configure**.
 
 If the start and end times are identical, quiet mode is active all day. The
-start is inclusive and the end is exclusive.
+start is inclusive and the end is exclusive. Home Assistant normally prepares a
+TTS result stream shortly before synthesis; Adaptive TTS freezes the policy at
+that preparation point so an already prepared request cannot change voice,
+provider, or cache identity halfway through. A request prepared immediately
+before a quiet-hours boundary therefore keeps the policy it was prepared with.
 
 When the override is `voice`, the configuration UI enumerates the provider's
 supported languages first, then loads voices for the selected language. If a
 provider does not enumerate voices, Adaptive TTS retains a text-field fallback.
-Non-voice options such as `style` or `emotion` also use a text field because
-Home Assistant does not provide a generic API for enumerating arbitrary option
-values.
+If a provider explicitly reports an empty finite voice list, there is no valid
+voice to select for that language. Non-voice options such as `style` or
+`emotion` use a text field because Home Assistant does not provide a generic
+API for enumerating arbitrary option values.
 
 ## Using Adaptive TTS in Assist
 
@@ -196,12 +201,16 @@ At runtime, a configured quiet option is checked against the provider's current
 or voice disappears, synthesis fails with a useful Home Assistant error rather
 than silently sending a stale override. Providers that do not enumerate valid
 values for a non-voice option can only be validated by the provider itself.
+Providers that signal synthesis failure by returning no audio, or by ending a
+stream without yielding audio, are also treated as failures so explicit
+override recovery remains consistent.
 
 Home Assistant forms its normal non-streaming cache identity before invoking a
-TTS entity. Adaptive TTS contributes a private policy fingerprint through its
-public default-options metadata so normal, quiet, one-shot voice override, and
-persistent voice override results use different cache entries. A unique token
-is used for each next-request override. The fingerprint is removed before
+TTS entity. Adaptive TTS contributes a private, self-contained policy snapshot
+through its public default-options metadata so normal, quiet, one-shot voice
+override, and persistent voice override results use the correct cache identity.
+A unique request nonce prevents separately prepared streams from sharing a
+pending one-shot override cache entry. The private snapshot is removed before
 delegation and is never sent to the underlying provider.
 
 ## Architecture and Home Assistant APIs
@@ -229,6 +238,7 @@ Assistant's normal storage helper. It does not mutate Assist pipeline records.
 
 ```bash
 python -m pip install -r requirements_test.txt
+node --test tests/frontend.test.mjs
 python -m pytest
 python -m ruff check .
 python -m ruff format --check .
