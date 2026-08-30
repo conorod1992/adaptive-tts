@@ -130,14 +130,49 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         self._override_lock = asyncio.Lock()
 
     async def async_load_voice_override(self, hass: HomeAssistant) -> None:
-        """Load the persistent voice override from Home Assistant storage."""
+        """Load a valid persistent voice override without blocking entity setup."""
         self._override_store = _voice_override_store(hass, self._entry)
-        stored = await self._override_store.async_load()
-        if not stored or not stored.get("voice"):
+        self._persistent_voice_override = None
+        try:
+            stored = await self._override_store.async_load()
+        except Exception as err:
+            _LOGGER.warning(
+                "Could not load persistent voice override for %s; "
+                "ignoring stored state: %s",
+                self._entry.entry_id,
+                err,
+            )
+            return
+
+        if not stored:
+            return
+        if not isinstance(stored, dict):
+            _LOGGER.warning(
+                "Discarding malformed persistent voice override for %s",
+                self._entry.entry_id,
+            )
+            await self._async_discard_stored_voice_override("malformed payload")
+            return
+
+        voice = stored.get("voice")
+        language = stored.get("language")
+        token = stored.get("token")
+        stored_provider = stored.get("underlying_entity_id")
+        if (
+            not isinstance(voice, str)
+            or not voice
+            or not (language is None or isinstance(language, str))
+            or not (token is None or isinstance(token, str))
+            or not (stored_provider is None or isinstance(stored_provider, str))
+        ):
+            _LOGGER.warning(
+                "Discarding malformed persistent voice override for %s",
+                self._entry.entry_id,
+            )
+            await self._async_discard_stored_voice_override("malformed fields")
             return
 
         current_provider = self.underlying_entity_id
-        stored_provider = stored.get("underlying_entity_id")
         if stored_provider and stored_provider != current_provider:
             _LOGGER.info(
                 "Discarding persistent voice override for old TTS provider %s; "
@@ -145,23 +180,46 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 stored_provider,
                 current_provider,
             )
-            await self._override_store.async_remove()
+            await self._async_discard_stored_voice_override("provider changed")
             return
 
-        token = str(stored["token"]) if stored.get("token") else secrets.token_hex(8)
+        effective_token = token or secrets.token_hex(8)
         self._persistent_voice_override = VoiceOverride(
-            voice=str(stored["voice"]),
-            language=(str(stored["language"]) if stored.get("language") else None),
-            token=token,
+            voice=voice,
+            language=(language or None),
+            token=effective_token,
         )
-        if not stored.get("token") or not stored_provider:
-            await self._override_store.async_save(
-                {
-                    "underlying_entity_id": current_provider,
-                    "language": self._persistent_voice_override.language,
-                    "voice": self._persistent_voice_override.voice,
-                    "token": token,
-                }
+        if not token or not stored_provider:
+            try:
+                await self._override_store.async_save(
+                    {
+                        "underlying_entity_id": current_provider,
+                        "language": self._persistent_voice_override.language,
+                        "voice": self._persistent_voice_override.voice,
+                        "token": effective_token,
+                    }
+                )
+            except Exception as err:
+                _LOGGER.warning(
+                    "Could not migrate persistent voice override storage for %s; "
+                    "using the loaded override for this session: %s",
+                    self._entry.entry_id,
+                    err,
+                )
+
+    async def _async_discard_stored_voice_override(self, reason: str) -> None:
+        """Best-effort remove invalid persisted override state."""
+        self._persistent_voice_override = None
+        if self._override_store is None:
+            return
+        try:
+            await self._override_store.async_remove()
+        except Exception as err:
+            _LOGGER.warning(
+                "Could not remove discarded persistent voice override for %s (%s): %s",
+                self._entry.entry_id,
+                reason,
+                err,
             )
 
     @property
@@ -611,12 +669,23 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         incoming_options.pop(CACHE_POLICY_OPTION, None)
         explicit_override = self._override_from_snapshot(snapshot)
         quiet_active = snapshot.quiet_mode_active
+        normal_language = language or underlying.default_language
+        effective_language = normal_language
 
-        effective_language = language or underlying.default_language
         if explicit_override and explicit_override.language:
             effective_language = explicit_override.language
         elif quiet_active and snapshot.quiet_option == "voice":
-            effective_language = snapshot.quiet_language or effective_language
+            quiet_language = snapshot.quiet_language or normal_language
+            if quiet_language in underlying.supported_languages:
+                effective_language = quiet_language
+            else:
+                _LOGGER.warning(
+                    "Ignoring quiet-hours voice policy for %s because language %s "
+                    "is no longer supported; using normal TTS settings",
+                    snapshot.underlying_entity_id,
+                    quiet_language,
+                )
+                quiet_active = False
 
         if effective_language not in underlying.supported_languages:
             _LOGGER.error(
@@ -634,36 +703,77 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         if quiet_active:
             option_name = snapshot.quiet_option
             option_value = snapshot.quiet_value
-            supported_options = underlying.supported_options or []
-            if option_name not in supported_options:
-                _LOGGER.error(
-                    "Quiet override option %s is no longer supported by %s",
-                    option_name,
-                    snapshot.underlying_entity_id,
-                )
-                raise HomeAssistantError(
-                    f"Quiet override option '{option_name}' is not supported by "
-                    f"{snapshot.underlying_entity_id}"
-                )
-            if option_name == "voice" and explicit_override is not None:
-                pass
-            else:
-                if option_name == "voice":
-                    voices = underlying.async_get_supported_voices(effective_language)
-                    if voices is not None and option_value not in {
-                        voice.voice_id for voice in voices
-                    }:
-                        _LOGGER.error(
-                            "Quiet voice %s is no longer supported by %s for %s",
-                            option_value,
+
+            # A user-requested voice override intentionally supersedes a
+            # quiet voice, so only validate/apply quiet policy that would
+            # actually affect this request.
+            if not (option_name == "voice" and explicit_override is not None):
+                try:
+                    supported_options = underlying.supported_options or []
+                except Exception as err:
+                    _LOGGER.warning(
+                        "Ignoring quiet-hours policy for %s because provider "
+                        "option metadata failed: %s",
+                        snapshot.underlying_entity_id,
+                        err,
+                    )
+                    quiet_active = False
+                else:
+                    if option_name not in supported_options:
+                        _LOGGER.warning(
+                            "Ignoring quiet-hours option %s for %s because it is "
+                            "no longer supported; using normal TTS settings",
+                            option_name,
                             snapshot.underlying_entity_id,
-                            effective_language,
                         )
-                        raise HomeAssistantError(
-                            f"Quiet voice '{option_value}' is not supported by "
-                            f"{snapshot.underlying_entity_id} for {effective_language}"
-                        )
-                effective_options[option_name] = option_value
+                        quiet_active = False
+                    elif option_name == "voice":
+                        try:
+                            voices = underlying.async_get_supported_voices(
+                                effective_language
+                            )
+                        except Exception as err:
+                            _LOGGER.warning(
+                                "Ignoring quiet-hours voice policy for %s because "
+                                "voice metadata failed: %s",
+                                snapshot.underlying_entity_id,
+                                err,
+                            )
+                            quiet_active = False
+                        else:
+                            if voices is not None and option_value not in {
+                                voice.voice_id for voice in voices
+                            }:
+                                _LOGGER.warning(
+                                    "Ignoring quiet-hours voice %s for %s/%s because "
+                                    "it is no longer supported; using normal TTS "
+                                    "settings",
+                                    option_value,
+                                    snapshot.underlying_entity_id,
+                                    effective_language,
+                                )
+                                quiet_active = False
+                            else:
+                                effective_options[option_name] = option_value
+                    else:
+                        effective_options[option_name] = option_value
+
+            if (
+                not quiet_active
+                and option_name == "voice"
+                and explicit_override is None
+            ):
+                effective_language = normal_language
+                if effective_language not in underlying.supported_languages:
+                    _LOGGER.error(
+                        "Underlying TTS entity %s does not support language %s",
+                        snapshot.underlying_entity_id,
+                        effective_language,
+                    )
+                    raise HomeAssistantError(
+                        f"Language '{effective_language}' is not supported by "
+                        f"{snapshot.underlying_entity_id}"
+                    )
 
         if explicit_override is not None:
             if "voice" not in (underlying.supported_options or []):

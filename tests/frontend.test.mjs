@@ -412,3 +412,96 @@ test("unavailable Adaptive TTS still allows clearing an override", async () => {
   assert.equal(panel.shadowRoot.getElementById("clear-override").disabled, false);
   assert.match(panel.shadowRoot.getElementById("override-error").textContent, /still clear/);
 });
+
+
+test("pending override mutation keeps both buttons disabled", async () => {
+  const panel = panelWith([
+    "override-engine", "override-language", "override-voice", "override-duration",
+    "set-override", "clear-override", "override-error", "override-success",
+    "engine", "language", "generate",
+  ]);
+  const service = deferred();
+  panel._hass = {
+    callService() { return service.promise; },
+  };
+  panel.shadowRoot.getElementById("override-engine").value = "tts.adaptive";
+  panel.shadowRoot.getElementById("override-language").value = "en-US";
+  panel.shadowRoot.getElementById("override-duration").value = "until_changed";
+  panel._appendOption(panel.shadowRoot.getElementById("override-voice"), "voice-a", "Voice A");
+  panel._overrideEngineInfo = engineInfo("tts.adaptive", "en-US");
+  panel._overrideEngineInfoLanguage = "en-US";
+
+  const action = panel._setOverride();
+  panel._syncAvailabilityControls();
+
+  assert.equal(panel.shadowRoot.getElementById("set-override").disabled, true);
+  assert.equal(panel.shadowRoot.getElementById("clear-override").disabled, true);
+
+  service.resolve();
+  await action;
+  assert.equal(panel.shadowRoot.getElementById("set-override").disabled, false);
+  assert.equal(panel.shadowRoot.getElementById("clear-override").disabled, false);
+});
+
+
+test("stale Set override completion is suppressed after selection changes", async () => {
+  const panel = panelWith([
+    "override-engine", "override-language", "override-voice", "override-duration",
+    "set-override", "clear-override", "override-error", "override-success",
+    "engine", "language", "generate",
+  ]);
+  const service = deferred();
+  panel._hass = {
+    callService() { return service.promise; },
+    async callWS(message) {
+      return {
+        ...engineInfo(message.engine_id, message.language || "en-US"),
+        voices: [{ voice_id: "voice-b", name: "Voice B" }],
+      };
+    },
+  };
+  panel.shadowRoot.getElementById("override-engine").value = "tts.first";
+  panel.shadowRoot.getElementById("override-language").value = "en-US";
+  panel.shadowRoot.getElementById("override-duration").value = "next_request";
+  panel._appendOption(panel.shadowRoot.getElementById("override-voice"), "voice-a", "Voice A");
+  panel._overrideEngineInfo = engineInfo("tts.first", "en-US");
+  panel._overrideEngineInfoLanguage = "en-US";
+
+  const action = panel._setOverride();
+  panel.shadowRoot.getElementById("override-engine").value = "tts.second";
+  await panel._overrideEngineChanged();
+  service.resolve();
+  await action;
+
+  assert.equal(panel.shadowRoot.getElementById("override-success").textContent, "");
+  assert.equal(panel.shadowRoot.getElementById("override-error").textContent, "");
+});
+
+
+test("stale Clear override completion is suppressed after entity changes", async () => {
+  const panel = panelWith([
+    "override-engine", "override-language", "override-voice", "override-duration",
+    "set-override", "clear-override", "override-error", "override-success",
+    "engine", "language", "generate",
+  ]);
+  const service = deferred();
+  panel._hass = {
+    callService() { return service.promise; },
+    async callWS(message) {
+      return {
+        ...engineInfo(message.engine_id, message.language || "en-US"),
+        voices: [{ voice_id: "voice-b", name: "Voice B" }],
+      };
+    },
+  };
+  panel.shadowRoot.getElementById("override-engine").value = "tts.first";
+
+  const action = panel._clearOverride();
+  panel.shadowRoot.getElementById("override-engine").value = "tts.second";
+  await panel._overrideEngineChanged();
+  service.resolve();
+  await action;
+
+  assert.equal(panel.shadowRoot.getElementById("override-success").textContent, "");
+  assert.equal(panel.shadowRoot.getElementById("override-error").textContent, "");
+});

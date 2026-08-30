@@ -9,6 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.adaptive_tts.const import (
     CONF_QUIET_END,
+    CONF_QUIET_LANGUAGE,
     CONF_QUIET_MODE,
     CONF_QUIET_OPTION,
     CONF_QUIET_START,
@@ -34,7 +35,13 @@ from .test_tts import MockTTS
 
 
 def make_entry(
-    provider: str = "tts.source", *, entry_id: str | None = None
+    provider: str = "tts.source",
+    *,
+    entry_id: str | None = None,
+    quiet: bool = False,
+    quiet_option: str = "voice",
+    quiet_value: str = "normal",
+    quiet_language: str | None = None,
 ) -> MockConfigEntry:
     """Create an entry suitable for robustness tests."""
     kwargs = {
@@ -42,11 +49,16 @@ def make_entry(
         "title": "Adaptive TTS",
         "data": {
             CONF_UNDERLYING_TTS_ENTITY: provider,
-            CONF_QUIET_MODE: False,
-            CONF_QUIET_START: "23:00:00",
-            CONF_QUIET_END: "07:00:00",
-            CONF_QUIET_OPTION: "voice",
-            CONF_QUIET_VALUE: "normal",
+            CONF_QUIET_MODE: quiet,
+            CONF_QUIET_START: "00:00:00" if quiet else "23:00:00",
+            CONF_QUIET_END: "00:00:00" if quiet else "07:00:00",
+            CONF_QUIET_OPTION: quiet_option,
+            CONF_QUIET_VALUE: quiet_value,
+            **(
+                {CONF_QUIET_LANGUAGE: quiet_language}
+                if quiet_language is not None
+                else {}
+            ),
         },
     }
     if entry_id is not None:
@@ -285,3 +297,152 @@ def test_engine_metadata_distinguishes_none_from_empty_voice_list(hass) -> None:
         info = _engine_info(hass, "tts.source", "en-US")
     assert info["voices"] == []
     assert info["voices_enumerated"] is False
+
+
+def test_quiet_voice_removed_falls_back_to_normal_tts(hass) -> None:
+    """A stale optional quiet voice must not take down otherwise-valid TTS."""
+    source = MockTTS()
+    entity = AdaptiveTTSEntity(
+        make_entry(quiet=True, quiet_value="removed", quiet_language="en-GB")
+    )
+    attach(entity, hass, source)
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        resolved = entity.resolve_request("en-US", {"speed": "fast"})
+
+    assert resolved.language == "en-US"
+    assert resolved.options == {
+        "voice": "normal",
+        "format": "mp3",
+        "speed": "fast",
+    }
+    assert resolved.quiet_mode_active is False
+
+
+def test_removed_quiet_language_falls_back_to_request_language(hass) -> None:
+    """An obsolete quiet-language choice falls back to normal request policy."""
+    source = MockTTS()
+    source._attr_supported_languages = ["en-US"]
+    entity = AdaptiveTTSEntity(
+        make_entry(quiet=True, quiet_value="whisper", quiet_language="en-GB")
+    )
+    attach(entity, hass, source)
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        resolved = entity.resolve_request("en-US", {})
+
+    assert resolved.language == "en-US"
+    assert resolved.options["voice"] == "normal"
+    assert resolved.quiet_mode_active is False
+
+
+def test_quiet_voice_metadata_failure_falls_back_to_normal_tts(hass) -> None:
+    """A provider voice-catalogue failure cannot make quiet policy fatal."""
+    source = MockTTS()
+    source.async_get_supported_voices = lambda _language: (_ for _ in ()).throw(
+        RuntimeError("voice catalogue offline")
+    )
+    entity = AdaptiveTTSEntity(
+        make_entry(quiet=True, quiet_value="whisper", quiet_language="en-GB")
+    )
+    attach(entity, hass, source)
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        resolved = entity.resolve_request("en-US", {})
+
+    assert resolved.language == "en-US"
+    assert resolved.options["voice"] == "normal"
+    assert resolved.quiet_mode_active is False
+
+
+def test_removed_quiet_option_falls_back_to_normal_tts(hass) -> None:
+    """A provider removing an optional quiet option leaves normal TTS usable."""
+    source = MockTTS()
+    entity = AdaptiveTTSEntity(
+        make_entry(quiet=True, quiet_option="style", quiet_value="soft")
+    )
+    attach(entity, hass, source)
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        resolved = entity.resolve_request("en-US", {"speed": "slow"})
+
+    assert resolved.language == "en-US"
+    assert "style" not in resolved.options
+    assert resolved.options["speed"] == "slow"
+    assert resolved.quiet_mode_active is False
+
+
+@pytest.mark.asyncio
+async def test_malformed_override_storage_is_discarded(hass) -> None:
+    """Malformed persisted state cannot block Adaptive TTS entity setup."""
+    removed = False
+
+    class MalformedStore:
+        async def async_load(self):
+            return ["not", "a", "mapping"]
+
+        async def async_remove(self):
+            nonlocal removed
+            removed = True
+
+    entity = AdaptiveTTSEntity(make_entry())
+    entity.hass = hass
+    with patch(
+        "custom_components.adaptive_tts.tts._voice_override_store",
+        return_value=MalformedStore(),
+    ):
+        await entity.async_load_voice_override(hass)
+
+    assert entity.persistent_voice_override is None
+    assert removed is True
+
+
+@pytest.mark.asyncio
+async def test_malformed_override_fields_are_discarded_even_if_cleanup_fails(
+    hass,
+) -> None:
+    """Cleanup failure for corrupt state is logged rather than blocking setup."""
+
+    class MalformedStore:
+        async def async_load(self):
+            return {"voice": 123, "language": ["en-US"]}
+
+        async def async_remove(self):
+            raise OSError("read-only storage")
+
+    entity = AdaptiveTTSEntity(make_entry())
+    entity.hass = hass
+    with patch(
+        "custom_components.adaptive_tts.tts._voice_override_store",
+        return_value=MalformedStore(),
+    ):
+        await entity.async_load_voice_override(hass)
+
+    assert entity.persistent_voice_override is None
+
+
+@pytest.mark.asyncio
+async def test_override_storage_load_failure_does_not_block_setup(hass) -> None:
+    """Unreadable private storage degrades to no active persistent override."""
+
+    class FailingStore:
+        async def async_load(self):
+            raise ValueError("corrupt JSON")
+
+    entity = AdaptiveTTSEntity(make_entry())
+    entity.hass = hass
+    with patch(
+        "custom_components.adaptive_tts.tts._voice_override_store",
+        return_value=FailingStore(),
+    ):
+        await entity.async_load_voice_override(hass)
+
+    assert entity.persistent_voice_override is None
