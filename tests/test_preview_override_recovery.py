@@ -104,9 +104,7 @@ async def test_preview_preflight_clears_stale_persistent_override(
             "custom_components.adaptive_tts.preview.get_engine_instance",
             return_value=entity,
         ),
-        patch(
-            "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
-        ),
+        patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
         pytest.raises(HomeAssistantError, match="cheerful-gb"),
     ):
         await create_preview(
