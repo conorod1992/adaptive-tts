@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
@@ -82,6 +83,24 @@ class ResolvedRequest:
     voice_override_scope: str | None = None
 
 
+def _voice_override_store(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> Store[dict[str, str | None]]:
+    """Return the persistent voice override store for a config entry."""
+    return Store(
+        hass,
+        _STORAGE_VERSION,
+        f"{DOMAIN}.voice_override.{entry.entry_id}",
+    )
+
+
+async def async_remove_voice_override_storage(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Remove persistent voice override storage for a deleted config entry."""
+    await _voice_override_store(hass, entry).async_remove()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -108,32 +127,42 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         self._persistent_voice_override: VoiceOverride | None = None
         self._next_voice_override: VoiceOverride | None = None
         self._override_store: Store[dict[str, str | None]] | None = None
+        self._override_lock = asyncio.Lock()
 
     async def async_load_voice_override(self, hass: HomeAssistant) -> None:
         """Load the persistent voice override from Home Assistant storage."""
-        self._override_store = Store(
-            hass,
-            _STORAGE_VERSION,
-            f"{DOMAIN}.voice_override.{self._entry.entry_id}",
-        )
+        self._override_store = _voice_override_store(hass, self._entry)
         stored = await self._override_store.async_load()
-        if stored and stored.get("voice"):
-            token = (
-                str(stored["token"]) if stored.get("token") else secrets.token_hex(8)
+        if not stored or not stored.get("voice"):
+            return
+
+        current_provider = self.underlying_entity_id
+        stored_provider = stored.get("underlying_entity_id")
+        if stored_provider and stored_provider != current_provider:
+            _LOGGER.info(
+                "Discarding persistent voice override for old TTS provider %s; "
+                "Adaptive TTS now wraps %s",
+                stored_provider,
+                current_provider,
             )
-            self._persistent_voice_override = VoiceOverride(
-                voice=str(stored["voice"]),
-                language=(str(stored["language"]) if stored.get("language") else None),
-                token=token,
+            await self._override_store.async_remove()
+            return
+
+        token = str(stored["token"]) if stored.get("token") else secrets.token_hex(8)
+        self._persistent_voice_override = VoiceOverride(
+            voice=str(stored["voice"]),
+            language=(str(stored["language"]) if stored.get("language") else None),
+            token=token,
+        )
+        if not stored.get("token") or not stored_provider:
+            await self._override_store.async_save(
+                {
+                    "underlying_entity_id": current_provider,
+                    "language": self._persistent_voice_override.language,
+                    "voice": self._persistent_voice_override.voice,
+                    "token": token,
+                }
             )
-            if not stored.get("token"):
-                await self._override_store.async_save(
-                    {
-                        "language": self._persistent_voice_override.language,
-                        "voice": self._persistent_voice_override.voice,
-                        "token": token,
-                    }
-                )
 
     @property
     def persistent_voice_override(self) -> VoiceOverride | None:
@@ -400,7 +429,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             config[CONF_QUIET_END],
         )
 
-    def _validate_voice_override(
+    def validate_voice_override(
         self, language: str | None, voice: str
     ) -> VoiceOverride:
         """Validate an explicit voice override against the wrapped provider."""
@@ -420,7 +449,9 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                     f"{self.underlying_entity_id}"
                 )
             voices = underlying.async_get_supported_voices(language)
-            if voices and voice not in {item.voice_id for item in voices}:
+            if voices is not None and voice not in {
+                item.voice_id for item in voices
+            }:
                 raise HomeAssistantError(
                     f"Voice '{voice}' is not supported by "
                     f"{self.underlying_entity_id} for {language}"
@@ -431,44 +462,50 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         self, language: str | None, voice: str, duration: str
     ) -> None:
         """Set a one-shot or persistent voice override."""
-        override = self._validate_voice_override(language, voice)
-        if duration == DURATION_NEXT_REQUEST:
-            self._next_voice_override = VoiceOverride(
+        override = self.validate_voice_override(language, voice)
+        if duration not in (DURATION_NEXT_REQUEST, DURATION_UNTIL_CHANGED):
+            raise HomeAssistantError(f"Unsupported voice override duration: {duration}")
+
+        async with self._override_lock:
+            if duration == DURATION_NEXT_REQUEST:
+                self._next_voice_override = VoiceOverride(
+                    voice=override.voice,
+                    language=override.language,
+                    token=secrets.token_hex(8),
+                )
+                return
+
+            if self._override_store is None:
+                raise HomeAssistantError(
+                    "Adaptive TTS voice override storage is unavailable"
+                )
+            persistent = VoiceOverride(
                 voice=override.voice,
                 language=override.language,
                 token=secrets.token_hex(8),
             )
-            return
-        if duration != DURATION_UNTIL_CHANGED:
-            raise HomeAssistantError(f"Unsupported voice override duration: {duration}")
-        persistent = VoiceOverride(
-            voice=override.voice,
-            language=override.language,
-            token=secrets.token_hex(8),
-        )
-        self._persistent_voice_override = persistent
-        if self._override_store is None:
-            raise HomeAssistantError(
-                "Adaptive TTS voice override storage is unavailable"
+            await self._override_store.async_save(
+                {
+                    "underlying_entity_id": self.underlying_entity_id,
+                    "language": persistent.language,
+                    "voice": persistent.voice,
+                    "token": persistent.token,
+                }
             )
-        await self._override_store.async_save(
-            {
-                "language": persistent.language,
-                "voice": persistent.voice,
-                "token": persistent.token,
-            }
-        )
+            self._persistent_voice_override = persistent
 
     async def async_clear_voice_override(self, scope: str = SCOPE_ALL) -> None:
         """Clear one-shot and/or persistent voice overrides."""
-        if scope in (SCOPE_ALL, SCOPE_NEXT_REQUEST):
-            self._next_voice_override = None
-        if scope in (SCOPE_ALL, SCOPE_PERSISTENT):
-            self._persistent_voice_override = None
-            if self._override_store is not None:
-                await self._override_store.async_remove()
         if scope not in (SCOPE_ALL, SCOPE_NEXT_REQUEST, SCOPE_PERSISTENT):
             raise HomeAssistantError(f"Unsupported voice override scope: {scope}")
+
+        async with self._override_lock:
+            if scope in (SCOPE_ALL, SCOPE_PERSISTENT):
+                if self._override_store is not None:
+                    await self._override_store.async_remove()
+                self._persistent_voice_override = None
+            if scope in (SCOPE_ALL, SCOPE_NEXT_REQUEST):
+                self._next_voice_override = None
 
     def _override_from_snapshot(self, snapshot: PolicySnapshot) -> VoiceOverride | None:
         """Return the explicit override captured for this request."""
@@ -484,15 +521,16 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             return override
         return None
 
-    def _consume_next_voice_override(
+    async def _async_consume_next_voice_override(
         self, override: VoiceOverride | None, scope: str | None
     ) -> None:
         """Consume a matching one-shot override when synthesis actually starts."""
         if scope != SCOPE_NEXT_REQUEST or override is None or override.token is None:
             return
-        pending = self._next_voice_override
-        if pending is not None and pending.token == override.token:
-            self._next_voice_override = None
+        async with self._override_lock:
+            pending = self._next_voice_override
+            if pending is not None and pending.token == override.token:
+                self._next_voice_override = None
 
     async def _async_clear_failed_voice_override(
         self, override: VoiceOverride | None, scope: str | None
@@ -501,24 +539,25 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         if override is None:
             return
         if scope == SCOPE_NEXT_REQUEST:
-            self._consume_next_voice_override(override, scope)
+            await self._async_consume_next_voice_override(override, scope)
             return
         if scope != SCOPE_PERSISTENT:
             return
 
-        persistent = self._persistent_voice_override
-        if persistent is None or persistent.token != override.token:
-            return
-        self._persistent_voice_override = None
-        if self._override_store is not None:
-            try:
-                await self._override_store.async_remove()
-            except Exception as err:
-                _LOGGER.error(
-                    "Failed to remove invalid persistent voice override "
-                    "from storage: %s",
-                    err,
-                )
+        async with self._override_lock:
+            persistent = self._persistent_voice_override
+            if persistent is None or persistent.token != override.token:
+                return
+            if self._override_store is not None:
+                try:
+                    await self._override_store.async_remove()
+                except Exception as err:
+                    _LOGGER.error(
+                        "Failed to remove invalid persistent voice override "
+                        "from storage: %s",
+                        err,
+                    )
+            self._persistent_voice_override = None
         _LOGGER.warning(
             "Cleared persistent voice override %s for %s after TTS generation failed",
             override.voice,
@@ -594,7 +633,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             else:
                 if option_name == "voice":
                     voices = underlying.async_get_supported_voices(effective_language)
-                    if voices and option_value not in {
+                    if voices is not None and option_value not in {
                         voice.voice_id for voice in voices
                     }:
                         _LOGGER.error(
@@ -615,7 +654,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                     f"{snapshot.underlying_entity_id} does not support voice overrides"
                 )
             voices = underlying.async_get_supported_voices(effective_language)
-            if voices and explicit_override.voice not in {
+            if voices is not None and explicit_override.voice not in {
                 voice.voice_id for voice in voices
             }:
                 raise HomeAssistantError(
@@ -665,7 +704,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 request_override, request_scope
             )
             raise
-        self._consume_next_voice_override(
+        await self._async_consume_next_voice_override(
             resolved.voice_override, resolved.voice_override_scope
         )
         return resolved
