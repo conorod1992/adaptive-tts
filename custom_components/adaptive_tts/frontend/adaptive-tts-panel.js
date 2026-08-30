@@ -1,7 +1,18 @@
 class AdaptiveTtsPanel extends HTMLElement {
   set hass(value) {
+    const previousAvailability = this._selectedAvailability;
     this._hass = value;
-    if (this.isConnected && !this._loaded && !this._loading) this._load();
+    if (this.isConnected && !this._loaded && !this._loading) {
+      this._load();
+      return;
+    }
+    if (this.isConnected && this._loaded && !this._loading) {
+      const currentAvailability = this._selectedAvailabilitySnapshot(value);
+      this._selectedAvailability = currentAvailability;
+      if (previousAvailability) {
+        void this._handleAvailabilityTransitions(previousAvailability, currentAvailability);
+      }
+    }
   }
 
   connectedCallback() {
@@ -135,6 +146,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     this.shadowRoot.getElementById("engine").addEventListener("change", () => this._engineChanged());
     this.shadowRoot.getElementById("language").addEventListener("change", () => this._languageChanged());
     this.shadowRoot.getElementById("generate").addEventListener("click", () => this._generate());
+    this.shadowRoot.getElementById("message").addEventListener("input", () => this._invalidateGeneration());
     this.shadowRoot.getElementById("audio").addEventListener("error", () => this._audioFailed());
   }
 
@@ -177,6 +189,7 @@ class AdaptiveTtsPanel extends HTMLElement {
 
       await this._engineChanged();
       this._loaded = true;
+      this._selectedAvailability = this._selectedAvailabilitySnapshot(this._hass);
     } catch (err) {
       this._loaded = false;
       this._showError(err);
@@ -228,11 +241,27 @@ class AdaptiveTtsPanel extends HTMLElement {
     );
   }
 
-  _generationIsCurrent(requestId, engineId, language) {
+  _generationFingerprint() {
+    const voice = this.shadowRoot.getElementById("voice");
+    const message = this.shadowRoot.getElementById("message");
+    const options = [...this.shadowRoot.querySelectorAll("[data-option]")].map((input) => [
+      input.dataset.option,
+      input.dataset.optionType,
+      input.value,
+    ]);
+    return JSON.stringify({
+      engine: this.shadowRoot.getElementById("engine").value,
+      language: this.shadowRoot.getElementById("language").value,
+      voice: voice?.value ?? "",
+      message: message?.value ?? "",
+      options,
+    });
+  }
+
+  _generationIsCurrent(requestId, fingerprint) {
     return (
       this._generationRequestId === requestId &&
-      this.shadowRoot.getElementById("engine").value === engineId &&
-      this.shadowRoot.getElementById("language").value === language
+      this._generationFingerprint() === fingerprint
     );
   }
 
@@ -254,14 +283,46 @@ class AdaptiveTtsPanel extends HTMLElement {
     return true;
   }
 
+  _entityAvailability(hass, engineId) {
+    if (!engineId || !hass?.states) return null;
+    const state = hass.states[engineId];
+    return Boolean(state && state.state !== "unavailable");
+  }
+
+  _selectedAvailabilitySnapshot(hass) {
+    const engineId = this.shadowRoot?.getElementById("engine")?.value ?? "";
+    const overrideEngineId = this.shadowRoot?.getElementById("override-engine")?.value ?? "";
+    return {
+      engineId,
+      engineAvailable: this._entityAvailability(hass, engineId),
+      overrideEngineId,
+      overrideEngineAvailable: this._entityAvailability(hass, overrideEngineId),
+    };
+  }
+
+  async _handleAvailabilityTransitions(previous, current) {
+    const previewChanged =
+      previous.engineId === current.engineId &&
+      current.engineId &&
+      previous.engineAvailable !== null &&
+      current.engineAvailable !== null &&
+      previous.engineAvailable !== current.engineAvailable;
+    const overrideChanged =
+      previous.overrideEngineId === current.overrideEngineId &&
+      current.overrideEngineId &&
+      previous.overrideEngineAvailable !== null &&
+      current.overrideEngineAvailable !== null &&
+      previous.overrideEngineAvailable !== current.overrideEngineAvailable;
+
+    if (previewChanged) await this._engineChanged();
+    if (overrideChanged) await this._overrideEngineChanged();
+    this._selectedAvailability = this._selectedAvailabilitySnapshot(this._hass);
+  }
+
   _engineAvailable(engineId, info) {
     if (!engineId) return false;
-    if (this._hass?.states) {
-      const state = this._hass.states[engineId];
-      if (!state) return false;
-      return state.state !== "unavailable";
-    }
-    return info?.available !== false;
+    const live = this._entityAvailability(this._hass, engineId);
+    return live === null ? info?.available !== false : live;
   }
 
   _syncAvailabilityControls() {
@@ -389,6 +450,8 @@ class AdaptiveTtsPanel extends HTMLElement {
       control.type = "text";
       control.placeholder = includeDefault ? "Provider default or voice ID" : "Provider voice ID";
     }
+    control.addEventListener("input", () => this._invalidateGeneration());
+    control.addEventListener("change", () => this._invalidateGeneration());
     current.replaceWith(control);
     return control;
   }
@@ -590,6 +653,8 @@ class AdaptiveTtsPanel extends HTMLElement {
         input.dataset.optionType = "string";
       }
       input.dataset.option = name;
+      input.addEventListener("input", () => this._invalidateGeneration());
+      input.addEventListener("change", () => this._invalidateGeneration());
       label.append(input);
       container.append(label);
     }
@@ -622,6 +687,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     this._generationRequestId = requestId;
     const engineId = this.shadowRoot.getElementById("engine").value;
     const language = this.shadowRoot.getElementById("language").value;
+    const fingerprint = this._generationFingerprint();
     try {
       if (!this._engineInfo || this._engineInfoLanguage !== language) {
         throw new Error("Provider details are still loading. Try again in a moment.");
@@ -645,7 +711,7 @@ class AdaptiveTtsPanel extends HTMLElement {
         options,
         message: this.shadowRoot.getElementById("message").value,
       });
-      if (!this._generationIsCurrent(requestId, engineId, language)) return;
+      if (!this._generationIsCurrent(requestId, fingerprint)) return;
       const audio = this.shadowRoot.getElementById("audio");
       audio.src = result.url;
       audio.load();
@@ -656,12 +722,12 @@ class AdaptiveTtsPanel extends HTMLElement {
       this.shadowRoot.getElementById("used-quiet").textContent = result.quiet_mode_active ? "Yes" : "No";
       this.shadowRoot.getElementById("result").style.display = "block";
     } catch (err) {
-      if (this._generationIsCurrent(requestId, engineId, language)) {
+      if (this._generationIsCurrent(requestId, fingerprint)) {
         this._clearResult();
         this._showError(err);
       }
     } finally {
-      if (this._generationIsCurrent(requestId, engineId, language)) {
+      if (this._generationIsCurrent(requestId, fingerprint)) {
         button.disabled =
           !this._engineInfo ||
           this._engineInfoLanguage !== language ||
