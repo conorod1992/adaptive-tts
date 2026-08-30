@@ -165,13 +165,10 @@ async def test_config_flow_rejects_voice_not_in_enumerated_list(hass) -> None:
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {CONF_QUIET_LANGUAGE: "en-US"}
         )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONF_QUIET_VALUE: "stale"}
-        )
-
-    assert result["type"] is data_entry_flow.FlowResultType.FORM
-    assert result["step_id"] == "override"
-    assert result["errors"][CONF_QUIET_VALUE] == "unsupported_voice"
+        with pytest.raises(data_entry_flow.InvalidData):
+            await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONF_QUIET_VALUE: "stale"}
+            )
 
 
 @pytest.mark.asyncio
