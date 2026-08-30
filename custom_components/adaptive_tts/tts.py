@@ -12,7 +12,6 @@ from datetime import datetime
 from typing import Any, override
 
 from homeassistant.components.tts import (
-    ATTR_PREFERRED_BITRATE,
     ATTR_PREFERRED_FORMAT,
     ATTR_PREFERRED_SAMPLE_BYTES,
     ATTR_PREFERRED_SAMPLE_CHANNELS,
@@ -58,7 +57,9 @@ _PREFERRED_OUTPUT_OPTIONS = frozenset(
         ATTR_PREFERRED_SAMPLE_RATE,
         ATTR_PREFERRED_SAMPLE_CHANNELS,
         ATTR_PREFERRED_SAMPLE_BYTES,
-        ATTR_PREFERRED_BITRATE,
+        # Added to Home Assistant after the oldest supported/tested 2026.8 API.
+        # Use the stable option name so importing Adaptive TTS remains compatible.
+        "preferred_bitrate",
     }
 )
 
