@@ -252,7 +252,7 @@ def test_wrapper_contract_is_stable_across_provider_capabilities(hass) -> None:
         ha_tts.ATTR_PREFERRED_SAMPLE_RATE,
         ha_tts.ATTR_PREFERRED_SAMPLE_CHANNELS,
         ha_tts.ATTR_PREFERRED_SAMPLE_BYTES,
-        ha_tts.ATTR_PREFERRED_BITRATE,
+        "preferred_bitrate",
     ]
     entity = AdaptiveTTSEntity(make_entry())
     attach(entity, hass, source)
