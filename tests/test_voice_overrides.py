@@ -4,7 +4,12 @@ from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
-from homeassistant.components.tts import TextToSpeechEntity, Voice
+from homeassistant.components.tts import (
+    TextToSpeechEntity,
+    TTSAudioRequest,
+    TTSAudioResponse,
+    Voice,
+)
 from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -223,6 +228,78 @@ async def test_failed_persistent_override_is_cleared(hass, tmp_path) -> None:
         attach(reloaded, hass, source)
         await reloaded.async_load_voice_override(hass)
         assert reloaded.persistent_voice_override is None
+
+
+@pytest.mark.asyncio
+async def test_no_audio_result_clears_persistent_override(hass, tmp_path) -> None:
+    """A provider's (None, None) failure cannot leave a bad override active."""
+    hass.config.config_dir = str(tmp_path)
+    entry = make_entry()
+    source = OverrideTTS()
+    entity = AdaptiveTTSEntity(entry)
+    attach(entity, hass, source)
+    await entity.async_load_voice_override(hass)
+
+    async def no_audio(message, language, options):
+        return None, None
+
+    source.async_get_tts_audio = no_audio
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        await entity.async_set_voice_override(
+            "en-GB", "cheerful-gb", DURATION_UNTIL_CHANGED
+        )
+        policy = entity.default_options[CACHE_POLICY_OPTION]
+        with pytest.raises(HomeAssistantError, match="No TTS audio"):
+            await entity.async_get_tts_audio(
+                "Silent failure", "en-US", {CACHE_POLICY_OPTION: policy}
+            )
+
+    assert entity.persistent_voice_override is None
+
+
+@pytest.mark.asyncio
+async def test_empty_stream_clears_persistent_override(hass, tmp_path) -> None:
+    """A delegated stream ending without audio is treated as a TTS failure."""
+    hass.config.config_dir = str(tmp_path)
+    entry = make_entry()
+    source = OverrideTTS()
+    entity = AdaptiveTTSEntity(entry)
+    attach(entity, hass, source)
+    await entity.async_load_voice_override(hass)
+
+    async def message_gen():
+        yield "Silent stream"
+
+    async def empty_audio_gen():
+        if False:
+            yield b""
+
+    async def empty_stream(_request):
+        return TTSAudioResponse("mp3", empty_audio_gen())
+
+    source.async_supports_streaming_input = lambda: True
+    source.async_stream_tts_audio = empty_stream
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        await entity.async_set_voice_override(
+            "en-GB", "cheerful-gb", DURATION_UNTIL_CHANGED
+        )
+        policy = entity.default_options[CACHE_POLICY_OPTION]
+        response = await entity.async_stream_tts_audio(
+            TTSAudioRequest(
+                "en-US",
+                {CACHE_POLICY_OPTION: policy},
+                message_gen(),
+            )
+        )
+        with pytest.raises(HomeAssistantError, match="No TTS audio"):
+            _ = b"".join([chunk async for chunk in response.data_gen])
+
+    assert entity.persistent_voice_override is None
 
 
 @pytest.mark.asyncio
