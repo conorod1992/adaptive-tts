@@ -57,8 +57,7 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
             }
         ),
         "voices": [
-            {"voice_id": voice.voice_id, "name": voice.name}
-            for voice in (voices or [])
+            {"voice_id": voice.voice_id, "name": voice.name} for voice in (voices or [])
         ],
         "voices_enumerated": voices is not None,
         "available": getattr(engine, "available", True),
