@@ -83,6 +83,31 @@ class ResolvedRequest:
     voice_override_scope: str | None = None
 
 
+def _validate_tts_audio_result(
+    entity_id: str, extension: Any, data: Any
+) -> tuple[str, bytes]:
+    """Validate one-shot audio returned by an underlying provider."""
+    if not extension or not data:
+        raise HomeAssistantError(f"No TTS audio returned by {entity_id}")
+    if not isinstance(extension, str) or not isinstance(data, bytes):
+        raise HomeAssistantError(f"Invalid TTS audio returned by {entity_id}")
+    return extension, data
+
+
+def _validate_stream_response(entity_id: str, response: Any) -> TTSAudioResponse:
+    """Validate the shape of a streaming response before exposing it to HA."""
+    if (
+        not isinstance(response, TTSAudioResponse)
+        or not isinstance(response.extension, str)
+        or not response.extension
+        or not hasattr(response.data_gen, "__aiter__")
+    ):
+        raise HomeAssistantError(
+            f"Invalid streaming TTS response returned by {entity_id}"
+        )
+    return response
+
+
 def _voice_override_store(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> Store[dict[str, str | None]]:
@@ -887,6 +912,9 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             extension, data = await underlying.async_get_tts_audio(
                 message, resolved.language, resolved.options
             )
+            extension, data = _validate_tts_audio_result(
+                resolved.underlying_entity_id, extension, data
+            )
         except HomeAssistantError:
             await self._async_clear_failed_voice_override(
                 resolved.voice_override, resolved.voice_override_scope
@@ -904,13 +932,6 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(
                 f"TTS generation failed in {resolved.underlying_entity_id}: {err}"
             ) from err
-        if not extension or not data:
-            await self._async_clear_failed_voice_override(
-                resolved.voice_override, resolved.voice_override_scope
-            )
-            raise HomeAssistantError(
-                f"No TTS audio returned by {resolved.underlying_entity_id}"
-            )
         return extension, data
 
     @override
@@ -952,6 +973,9 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                         resolved.language, resolved.options, request.message_gen
                     )
                 )
+                response = _validate_stream_response(
+                    resolved.underlying_entity_id, response
+                )
             except HomeAssistantError:
                 await self._async_clear_failed_voice_override(
                     resolved.voice_override, resolved.voice_override_scope
@@ -971,26 +995,31 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                     f"{resolved.underlying_entity_id}: {err}"
                 ) from err
 
-            if not response.extension:
-                await self._async_clear_failed_voice_override(
-                    resolved.voice_override, resolved.voice_override_scope
-                )
-                raise HomeAssistantError(
-                    f"No TTS audio returned by {resolved.underlying_entity_id}"
-                )
-
             async def guarded_data_gen():
                 has_audio = False
                 try:
                     async for chunk in response.data_gen:
+                        if not isinstance(chunk, bytes):
+                            raise HomeAssistantError(
+                                f"Invalid TTS audio chunk returned by "
+                                f"{resolved.underlying_entity_id}"
+                            )
                         if chunk:
                             has_audio = True
                         yield chunk
-                except Exception:
+                except HomeAssistantError:
                     await self._async_clear_failed_voice_override(
                         resolved.voice_override, resolved.voice_override_scope
                     )
                     raise
+                except Exception as err:
+                    await self._async_clear_failed_voice_override(
+                        resolved.voice_override, resolved.voice_override_scope
+                    )
+                    raise HomeAssistantError(
+                        f"Streaming TTS audio failed in "
+                        f"{resolved.underlying_entity_id}: {err}"
+                    ) from err
                 if not has_audio:
                     await self._async_clear_failed_voice_override(
                         resolved.voice_override, resolved.voice_override_scope
@@ -1005,6 +1034,9 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             message = "".join([chunk async for chunk in request.message_gen])
             extension, data = await underlying.async_get_tts_audio(
                 message, resolved.language, resolved.options
+            )
+            extension, data = _validate_tts_audio_result(
+                resolved.underlying_entity_id, extension, data
             )
         except HomeAssistantError:
             await self._async_clear_failed_voice_override(
@@ -1023,13 +1055,6 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(
                 f"TTS generation failed in {resolved.underlying_entity_id}: {err}"
             ) from err
-        if not extension or not data:
-            await self._async_clear_failed_voice_override(
-                resolved.voice_override, resolved.voice_override_scope
-            )
-            raise HomeAssistantError(
-                f"No TTS audio returned by {resolved.underlying_entity_id}"
-            )
 
         async def data_gen():
             yield data
