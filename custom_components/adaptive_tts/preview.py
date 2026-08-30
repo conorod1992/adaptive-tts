@@ -35,8 +35,21 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
     engine = get_engine_instance(hass, engine_id)
     if engine is None:
         raise HomeAssistantError(f"TTS entity {engine_id} was not found")
+
+    available = bool(getattr(engine, "available", True))
     effective_language = language or engine.default_language
-    voices = engine.async_get_supported_voices(effective_language)
+    voices = None
+    if available and effective_language:
+        try:
+            voices = engine.async_get_supported_voices(effective_language)
+        except Exception as err:
+            _LOGGER.warning(
+                "Could not enumerate voices for TTS provider %s (%s): %s",
+                engine_id,
+                effective_language,
+                err,
+            )
+
     return {
         "engine_id": engine_id,
         "name": getattr(engine, "name", None) or engine_id,
@@ -60,7 +73,7 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
             {"voice_id": voice.voice_id, "name": voice.name} for voice in (voices or [])
         ],
         "voices_enumerated": voices is not None,
-        "available": getattr(engine, "available", True),
+        "available": available,
     }
 
 
@@ -164,6 +177,16 @@ async def websocket_generate(
 
 async def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, Any]:
     """Generate a bounded TTS preview before returning replay metadata."""
+    engine = get_engine_instance(hass, msg["engine_id"])
+    if engine is None:
+        raise HomeAssistantError(f"TTS entity {msg['engine_id']} was not found")
+    if not getattr(engine, "available", True):
+        raise HomeAssistantError(
+            f"TTS entity {msg['engine_id']} is currently unavailable"
+        )
+
+    # Reject an unavailable provider before Home Assistant allocates and
+    # registers a temporary result stream for a request that cannot run.
     stream = tts.async_create_stream(
         hass,
         engine=msg["engine_id"],
@@ -171,10 +194,6 @@ async def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
         options=msg.get("options", {}),
     )
     try:
-        engine = get_engine_instance(hass, msg["engine_id"])
-        if engine is None:
-            raise HomeAssistantError(f"TTS entity {msg['engine_id']} was not found")
-
         if isinstance(engine, AdaptiveTTSEntity):
             resolved = engine.resolve_request(stream.language, stream.options)
             underlying_entity_id = resolved.underlying_entity_id

@@ -151,19 +151,29 @@ class AdaptiveTtsPanel extends HTMLElement {
       const engine = this.shadowRoot.getElementById("engine");
       for (const item of data.engines) {
         const suffix = item.is_adaptive ? " (Adaptive)" : " (Source)";
-        this._appendOption(engine, item.engine_id, `${item.name}${suffix}`);
+        const availability = item.available === false ? " — unavailable" : "";
+        this._appendOption(engine, item.engine_id, `${item.name}${suffix}${availability}`);
       }
-      if (!data.engines.length) throw new Error("No TTS entities are currently available.");
+      if (!data.engines.length) throw new Error("No TTS entities are configured.");
+      const firstAvailableEngine = data.engines.find((item) => item.available !== false);
+      if (firstAvailableEngine) engine.value = firstAvailableEngine.engine_id;
 
       const overrideEngine = this.shadowRoot.getElementById("override-engine");
-      for (const item of data.engines.filter((candidate) => candidate.is_adaptive)) {
-        this._appendOption(overrideEngine, item.engine_id, item.name);
+      const adaptiveEngines = data.engines.filter((candidate) => candidate.is_adaptive);
+      for (const item of adaptiveEngines) {
+        const availability = item.available === false ? " — unavailable" : "";
+        this._appendOption(overrideEngine, item.engine_id, `${item.name}${availability}`);
       }
       const hasAdaptive = overrideEngine.options.length > 0;
       this.shadowRoot.getElementById("set-override").disabled = !hasAdaptive;
       this.shadowRoot.getElementById("clear-override").disabled = !hasAdaptive;
-      if (hasAdaptive) await this._overrideEngineChanged();
-      else this._showOverrideError("No Adaptive TTS entities are currently available.");
+      if (hasAdaptive) {
+        const firstAvailableAdaptive = adaptiveEngines.find((item) => item.available !== false);
+        if (firstAvailableAdaptive) overrideEngine.value = firstAvailableAdaptive.engine_id;
+        await this._overrideEngineChanged();
+      } else {
+        this._showOverrideError("No Adaptive TTS entities are configured.");
+      }
 
       await this._engineChanged();
       this._loaded = true;
@@ -230,6 +240,38 @@ class AdaptiveTtsPanel extends HTMLElement {
     this._clearResult();
   }
 
+  _engineAvailable(engineId, info) {
+    if (!engineId) return false;
+    if (this._hass?.states) {
+      const state = this._hass.states[engineId];
+      if (!state) return false;
+      return state.state !== "unavailable";
+    }
+    return info?.available !== false;
+  }
+
+  _syncAvailabilityControls() {
+    const engineId = this.shadowRoot.getElementById("engine").value;
+    const language = this.shadowRoot.getElementById("language").value;
+    this.shadowRoot.getElementById("generate").disabled = !(
+      this._engineInfo &&
+      this._engineInfoLanguage === language &&
+      this._engineAvailable(engineId, this._engineInfo)
+    );
+
+    const overrideEngineId = this.shadowRoot.getElementById("override-engine").value;
+    const overrideLanguage = this.shadowRoot.getElementById("override-language").value;
+    const voice = this.shadowRoot.getElementById("override-voice");
+    const hasVoiceChoice = voice.tagName !== "SELECT" || voice.options.length > 0;
+    this.shadowRoot.getElementById("set-override").disabled = !(
+      this._overrideEngineInfo &&
+      this._overrideEngineInfoLanguage === overrideLanguage &&
+      this._engineAvailable(overrideEngineId, this._overrideEngineInfo) &&
+      hasVoiceChoice
+    );
+    this.shadowRoot.getElementById("clear-override").disabled = !overrideEngineId;
+  }
+
   async _overrideEngineChanged() {
     this._clearOverrideMessages();
     this._overrideEngineInfo = null;
@@ -240,13 +282,24 @@ class AdaptiveTtsPanel extends HTMLElement {
     const engineId = this.shadowRoot.getElementById("override-engine").value;
     const setButton = this.shadowRoot.getElementById("set-override");
     setButton.disabled = true;
-    if (!engineId) return;
+    if (!engineId) {
+      this._syncAvailabilityControls();
+      return;
+    }
     try {
       const info = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId });
       if (!this._requestIsCurrent("_overrideEngineRequestId", requestId, "override-engine", engineId)) return;
       this._overrideEngineInfo = info;
       const language = this.shadowRoot.getElementById("override-language");
       language.replaceChildren();
+      if (!this._engineAvailable(engineId, info)) {
+        this._replaceVoiceControl("override-voice", [], true, false);
+        this._showOverrideError(
+          "The selected Adaptive TTS entity is currently unavailable. You can still clear an existing override.",
+        );
+        this._syncAvailabilityControls();
+        return;
+      }
       for (const item of info.supported_languages) this._appendOption(language, item, item);
       if (info.default_language && info.supported_languages.includes(info.default_language)) {
         language.value = info.default_language;
@@ -256,6 +309,7 @@ class AdaptiveTtsPanel extends HTMLElement {
       if (this._requestIsCurrent("_overrideEngineRequestId", requestId, "override-engine", engineId)) {
         if (this._loading) throw err;
         this._showOverrideError(err);
+        this._syncAvailabilityControls();
       }
     }
   }
@@ -270,12 +324,23 @@ class AdaptiveTtsPanel extends HTMLElement {
     const language = this.shadowRoot.getElementById("override-language").value;
     const setButton = this.shadowRoot.getElementById("set-override");
     setButton.disabled = true;
-    if (!engineId || !language) return;
+    if (!engineId || !language) {
+      this._syncAvailabilityControls();
+      return;
+    }
     try {
       const info = await this._hass.callWS({ type: "adaptive_tts/engine", engine_id: engineId, language });
       if (!this._requestIsCurrent("_overrideLanguageRequestId", requestId, "override-language", language)) return;
       if (this.shadowRoot.getElementById("override-engine").value !== engineId) return;
       this._overrideEngineInfo = info;
+      if (!this._engineAvailable(engineId, info)) {
+        this._replaceVoiceControl("override-voice", [], true, false);
+        this._showOverrideError(
+          "The selected Adaptive TTS entity is currently unavailable. You can still clear an existing override.",
+        );
+        this._syncAvailabilityControls();
+        return;
+      }
       this._overrideEngineInfoLanguage = language;
       const voice = this._replaceVoiceControl(
         "override-voice",
@@ -283,15 +348,15 @@ class AdaptiveTtsPanel extends HTMLElement {
         info.voices_enumerated,
         false,
       );
-      const canSet = !info.voices_enumerated || voice.options.length > 0;
-      setButton.disabled = !canSet;
-      if (info.voices_enumerated && !canSet) {
+      if (info.voices_enumerated && voice.options.length === 0) {
         this._showOverrideError("The wrapped TTS provider exposes no selectable voices for this language.");
       }
+      this._syncAvailabilityControls();
     } catch (err) {
       if (this._requestIsCurrent("_overrideLanguageRequestId", requestId, "override-language", language)) {
         if (this._loading) throw err;
         this._showOverrideError(err);
+        this._syncAvailabilityControls();
       }
     }
   }
@@ -321,6 +386,9 @@ class AdaptiveTtsPanel extends HTMLElement {
       const voice = this.shadowRoot.getElementById("override-voice").value.trim();
       const duration = this.shadowRoot.getElementById("override-duration").value;
       if (!entityId || !language || !voice) throw new Error("Choose an Adaptive TTS entity, language, and voice first.");
+      if (!this._engineAvailable(entityId, this._overrideEngineInfo)) {
+        throw new Error("The selected Adaptive TTS entity is currently unavailable.");
+      }
       if (!this._overrideEngineInfo || this._overrideEngineInfoLanguage !== language) {
         throw new Error("Voice details are still loading. Try again in a moment.");
       }
@@ -335,8 +403,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     } catch (err) {
       this._showOverrideError(err);
     } finally {
-      const voice = this.shadowRoot.getElementById("override-voice");
-      button.disabled = !this._overrideEngineInfo || (voice.tagName === "SELECT" && voice.options.length === 0);
+      this._syncAvailabilityControls();
     }
   }
 
@@ -355,7 +422,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     } catch (err) {
       this._showOverrideError(err);
     } finally {
-      button.disabled = !this.shadowRoot.getElementById("override-engine").value;
+      this._syncAvailabilityControls();
     }
   }
 
@@ -388,6 +455,13 @@ class AdaptiveTtsPanel extends HTMLElement {
       this._engineInfo = info;
       const language = this.shadowRoot.getElementById("language");
       language.replaceChildren();
+      if (!this._engineAvailable(engineId, info)) {
+        this._replaceVoiceControl("voice", [], true, true);
+        this.shadowRoot.getElementById("options").replaceChildren();
+        this._showError("The selected TTS entity is currently unavailable.");
+        this._syncAvailabilityControls();
+        return;
+      }
       for (const item of info.supported_languages) this._appendOption(language, item, item);
       const requested = preferredLanguage || info.default_language;
       if (requested && info.supported_languages.includes(requested)) language.value = requested;
@@ -396,6 +470,7 @@ class AdaptiveTtsPanel extends HTMLElement {
       if (this._requestIsCurrent("_engineRequestId", requestId, "engine", engineId)) {
         if (this._loading) throw err;
         this._showError(err);
+        this._syncAvailabilityControls();
       }
     }
   }
@@ -416,6 +491,13 @@ class AdaptiveTtsPanel extends HTMLElement {
       if (!this._requestIsCurrent("_languageRequestId", requestId, "language", language)) return;
       if (this.shadowRoot.getElementById("engine").value !== engineId) return;
       this._engineInfo = info;
+      if (!this._engineAvailable(engineId, info)) {
+        this._replaceVoiceControl("voice", [], true, true);
+        this.shadowRoot.getElementById("options").replaceChildren();
+        this._showError("The selected TTS entity is currently unavailable.");
+        this._syncAvailabilityControls();
+        return;
+      }
       this._engineInfoLanguage = language;
       const voice = this._replaceVoiceControl(
         "voice",
@@ -434,11 +516,12 @@ class AdaptiveTtsPanel extends HTMLElement {
       this.shadowRoot.getElementById("voice-label").style.display =
         info.supported_options.includes("voice") ? "flex" : "none";
       this._renderOptionInputs();
-      generate.disabled = false;
+      this._syncAvailabilityControls();
     } catch (err) {
       if (this._requestIsCurrent("_languageRequestId", requestId, "language", language)) {
         if (this._loading) throw err;
         this._showError(err);
+        this._syncAvailabilityControls();
       }
     }
   }
@@ -512,6 +595,9 @@ class AdaptiveTtsPanel extends HTMLElement {
       if (!this._engineInfo || this._engineInfoLanguage !== language) {
         throw new Error("Provider details are still loading. Try again in a moment.");
       }
+      if (!this._engineAvailable(engineId, this._engineInfo)) {
+        throw new Error("The selected TTS entity is currently unavailable.");
+      }
       const options = {};
       if (this._engineInfo.supported_options.includes("voice")) {
         const voice = this.shadowRoot.getElementById("voice").value.trim();
@@ -546,7 +632,9 @@ class AdaptiveTtsPanel extends HTMLElement {
     } finally {
       if (this._generationIsCurrent(requestId, engineId, language)) {
         button.disabled =
-          !this._engineInfo || this._engineInfoLanguage !== language;
+          !this._engineInfo ||
+          this._engineInfoLanguage !== language ||
+          !this._engineAvailable(engineId, this._engineInfo);
       }
     }
   }
