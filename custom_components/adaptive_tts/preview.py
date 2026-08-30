@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator, Mapping
 from typing import Any
 
@@ -14,6 +15,8 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import CACHE_POLICY_OPTION
 from .tts import AdaptiveTTSEntity
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _json_value(value: Any) -> Any:
@@ -33,7 +36,7 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
     if engine is None:
         raise HomeAssistantError(f"TTS entity {engine_id} was not found")
     effective_language = language or engine.default_language
-    voices = engine.async_get_supported_voices(effective_language) or []
+    voices = engine.async_get_supported_voices(effective_language)
     return {
         "engine_id": engine_id,
         "name": getattr(engine, "name", None) or engine_id,
@@ -54,8 +57,10 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
             }
         ),
         "voices": [
-            {"voice_id": voice.voice_id, "name": voice.name} for voice in voices
+            {"voice_id": voice.voice_id, "name": voice.name}
+            for voice in (voices or [])
         ],
+        "voices_enumerated": voices is not None,
         "available": getattr(engine, "available", True),
     }
 
@@ -87,8 +92,8 @@ def websocket_info(
     for engine_id in hass.states.async_entity_ids("tts"):
         try:
             engines.append(_engine_info(hass, engine_id, None))
-        except HomeAssistantError:
-            continue
+        except Exception as err:
+            _LOGGER.warning("Skipping broken TTS provider %s: %s", engine_id, err)
     connection.send_result(msg["id"], {"pipelines": pipelines, "engines": engines})
 
 
@@ -112,6 +117,14 @@ def websocket_engine(
     except HomeAssistantError as err:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, str(err))
         return
+    except Exception as err:
+        _LOGGER.exception("Failed to inspect TTS provider %s", msg["engine_id"])
+        connection.send_error(
+            msg["id"],
+            websocket_api.ERR_UNKNOWN_ERROR,
+            f"Could not read TTS provider metadata: {err}",
+        )
+        return
     connection.send_result(msg["id"], info)
 
 
@@ -134,7 +147,7 @@ async def websocket_generate(
     """Create a bounded, memory-only Home Assistant TTS preview stream."""
     try:
         result = await create_preview(hass, msg)
-    except (HomeAssistantError, ValueError) as err:
+    except Exception as err:
         connection.send_error(
             msg["id"], websocket_api.ERR_UNKNOWN_ERROR, f"TTS generation failed: {err}"
         )
@@ -151,39 +164,42 @@ async def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
         language=msg.get("language"),
         options=msg.get("options", {}),
     )
-    engine = get_engine_instance(hass, msg["engine_id"])
-    if engine is None:
-        raise HomeAssistantError(f"TTS entity {msg['engine_id']} was not found")
-
-    if isinstance(engine, AdaptiveTTSEntity):
-        resolved = engine.resolve_request(stream.language, stream.options)
-        underlying_entity_id = resolved.underlying_entity_id
-        effective_language = resolved.language
-        effective_options = resolved.options
-        quiet_active = resolved.quiet_mode_active
-    else:
-        underlying_entity_id = msg["engine_id"]
-        effective_language = stream.language
-        effective_options = stream.options
-        quiet_active = False
-
-    async def message_gen() -> AsyncGenerator[str]:
-        yield msg["message"]
-
-    # A message stream always uses HA's in-memory cache path, even for a
-    # provider that internally falls back to one-shot synthesis.
-    stream.async_set_message_stream(message_gen())
     try:
-        audio = b"".join([chunk async for chunk in stream.async_stream_result()])
+        engine = get_engine_instance(hass, msg["engine_id"])
+        if engine is None:
+            raise HomeAssistantError(f"TTS entity {msg['engine_id']} was not found")
+
+        if isinstance(engine, AdaptiveTTSEntity):
+            resolved = engine.resolve_request(stream.language, stream.options)
+            underlying_entity_id = resolved.underlying_entity_id
+            effective_language = resolved.language
+            effective_options = resolved.options
+            quiet_active = resolved.quiet_mode_active
+        else:
+            underlying_entity_id = msg["engine_id"]
+            effective_language = stream.language
+            effective_options = stream.options
+            quiet_active = False
+
+        async def message_gen() -> AsyncGenerator[str]:
+            yield msg["message"]
+
+        # A message stream always uses HA's in-memory cache path, even for a
+        # provider that internally falls back to one-shot synthesis.
+        stream.async_set_message_stream(message_gen())
+        has_audio = False
+        async for chunk in stream.async_stream_result():
+            if chunk:
+                has_audio = True
+        if not has_audio:
+            raise HomeAssistantError("The provider returned no preview audio")
     except HomeAssistantError:
         stream.delete()
         raise
     except Exception as err:
         stream.delete()
         raise HomeAssistantError(str(err)) from err
-    if not audio:
-        stream.delete()
-        raise HomeAssistantError("The provider returned no preview audio")
+
     return {
         "url": stream.url,
         "extension": stream.extension,
