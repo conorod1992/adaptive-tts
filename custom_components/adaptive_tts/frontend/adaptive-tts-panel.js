@@ -197,6 +197,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     this._overrideEngineRequestId = (this._overrideEngineRequestId || 0) + 1;
     this._overrideLanguageRequestId = (this._overrideLanguageRequestId || 0) + 1;
     this._generationRequestId = (this._generationRequestId || 0) + 1;
+    this._invalidateOverrideAction();
 
     const pipeline = this.shadowRoot.getElementById("pipeline");
     pipeline.replaceChildren();
@@ -240,6 +241,19 @@ class AdaptiveTtsPanel extends HTMLElement {
     this._clearResult();
   }
 
+  _invalidateOverrideAction() {
+    this._overrideActionRequestId = (this._overrideActionRequestId || 0) + 1;
+  }
+
+  _overrideActionIsCurrent(requestId, context) {
+    if (this._overrideActionRequestId !== requestId) return false;
+    if (this.shadowRoot.getElementById("override-engine").value !== context.entityId) return false;
+    if (context.language !== undefined && this.shadowRoot.getElementById("override-language").value !== context.language) return false;
+    if (context.voice !== undefined && this.shadowRoot.getElementById("override-voice").value.trim() !== context.voice) return false;
+    if (context.duration !== undefined && this.shadowRoot.getElementById("override-duration").value !== context.duration) return false;
+    return true;
+  }
+
   _engineAvailable(engineId, info) {
     if (!engineId) return false;
     if (this._hass?.states) {
@@ -263,17 +277,19 @@ class AdaptiveTtsPanel extends HTMLElement {
     const overrideLanguage = this.shadowRoot.getElementById("override-language").value;
     const voice = this.shadowRoot.getElementById("override-voice");
     const hasVoiceChoice = voice.tagName !== "SELECT" || voice.options.length > 0;
-    this.shadowRoot.getElementById("set-override").disabled = !(
+    const actionPending = this._overrideActionPendingId != null;
+    this.shadowRoot.getElementById("set-override").disabled = actionPending || !(
       this._overrideEngineInfo &&
       this._overrideEngineInfoLanguage === overrideLanguage &&
       this._engineAvailable(overrideEngineId, this._overrideEngineInfo) &&
       hasVoiceChoice
     );
-    this.shadowRoot.getElementById("clear-override").disabled = !overrideEngineId;
+    this.shadowRoot.getElementById("clear-override").disabled = actionPending || !overrideEngineId;
   }
 
   async _overrideEngineChanged() {
     this._clearOverrideMessages();
+    this._invalidateOverrideAction();
     this._overrideEngineInfo = null;
     this._overrideEngineInfoLanguage = null;
     this._overrideLanguageRequestId = (this._overrideLanguageRequestId || 0) + 1;
@@ -316,6 +332,7 @@ class AdaptiveTtsPanel extends HTMLElement {
 
   async _overrideLanguageChanged() {
     this._clearOverrideMessages();
+    this._invalidateOverrideAction();
     this._overrideEngineInfo = null;
     this._overrideEngineInfoLanguage = null;
     const requestId = (this._overrideLanguageRequestId || 0) + 1;
@@ -378,50 +395,64 @@ class AdaptiveTtsPanel extends HTMLElement {
 
   async _setOverride() {
     this._clearOverrideMessages();
-    const button = this.shadowRoot.getElementById("set-override");
-    button.disabled = true;
+    const context = {
+      entityId: this.shadowRoot.getElementById("override-engine").value,
+      language: this.shadowRoot.getElementById("override-language").value,
+      voice: this.shadowRoot.getElementById("override-voice").value.trim(),
+      duration: this.shadowRoot.getElementById("override-duration").value,
+    };
+    const requestId = (this._overrideActionRequestId || 0) + 1;
+    this._overrideActionRequestId = requestId;
+    this._overrideActionPendingId = requestId;
+    this._syncAvailabilityControls();
     try {
-      const entityId = this.shadowRoot.getElementById("override-engine").value;
-      const language = this.shadowRoot.getElementById("override-language").value;
-      const voice = this.shadowRoot.getElementById("override-voice").value.trim();
-      const duration = this.shadowRoot.getElementById("override-duration").value;
-      if (!entityId || !language || !voice) throw new Error("Choose an Adaptive TTS entity, language, and voice first.");
-      if (!this._engineAvailable(entityId, this._overrideEngineInfo)) {
+      if (!context.entityId || !context.language || !context.voice) {
+        throw new Error("Choose an Adaptive TTS entity, language, and voice first.");
+      }
+      if (!this._engineAvailable(context.entityId, this._overrideEngineInfo)) {
         throw new Error("The selected Adaptive TTS entity is currently unavailable.");
       }
-      if (!this._overrideEngineInfo || this._overrideEngineInfoLanguage !== language) {
+      if (!this._overrideEngineInfo || this._overrideEngineInfoLanguage !== context.language) {
         throw new Error("Voice details are still loading. Try again in a moment.");
       }
       await this._hass.callService("adaptive_tts", "set_voice_override", {
-        entity_id: entityId,
-        language,
-        voice,
-        duration,
+        entity_id: context.entityId,
+        language: context.language,
+        voice: context.voice,
+        duration: context.duration,
       });
-      const durationLabel = duration === "next_request" ? "the next TTS request" : "until changed again";
+      if (!this._overrideActionIsCurrent(requestId, context)) return;
+      const durationLabel = context.duration === "next_request" ? "the next TTS request" : "until changed again";
       this.shadowRoot.getElementById("override-success").textContent = `Voice override set for ${durationLabel}.`;
     } catch (err) {
-      this._showOverrideError(err);
+      if (this._overrideActionIsCurrent(requestId, context)) this._showOverrideError(err);
     } finally {
+      if (this._overrideActionPendingId === requestId) this._overrideActionPendingId = null;
       this._syncAvailabilityControls();
     }
   }
 
   async _clearOverride() {
     this._clearOverrideMessages();
-    const button = this.shadowRoot.getElementById("clear-override");
-    button.disabled = true;
+    const context = {
+      entityId: this.shadowRoot.getElementById("override-engine").value,
+    };
+    const requestId = (this._overrideActionRequestId || 0) + 1;
+    this._overrideActionRequestId = requestId;
+    this._overrideActionPendingId = requestId;
+    this._syncAvailabilityControls();
     try {
-      const entityId = this.shadowRoot.getElementById("override-engine").value;
-      if (!entityId) throw new Error("Choose an Adaptive TTS entity first.");
+      if (!context.entityId) throw new Error("Choose an Adaptive TTS entity first.");
       await this._hass.callService("adaptive_tts", "clear_voice_override", {
-        entity_id: entityId,
+        entity_id: context.entityId,
         scope: "all",
       });
+      if (!this._overrideActionIsCurrent(requestId, context)) return;
       this.shadowRoot.getElementById("override-success").textContent = "Voice override cleared.";
     } catch (err) {
-      this._showOverrideError(err);
+      if (this._overrideActionIsCurrent(requestId, context)) this._showOverrideError(err);
     } finally {
+      if (this._overrideActionPendingId === requestId) this._overrideActionPendingId = null;
       this._syncAvailabilityControls();
     }
   }

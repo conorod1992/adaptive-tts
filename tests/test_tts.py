@@ -169,32 +169,38 @@ def test_missing_underlying_entity(hass) -> None:
 
 
 def test_unsupported_quiet_voice(hass) -> None:
-    """A removed provider voice fails gracefully before synthesis."""
+    """A removed optional quiet voice falls back to normal TTS settings."""
     source = MockTTS()
     entity = AdaptiveTTSEntity(make_entry(quiet=True, value="removed-voice"))
     attach(entity, hass, source)
-    with (
-        patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
-        pytest.raises(HomeAssistantError, match="not supported"),
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
     ):
-        entity.resolve_request("en-US", {})
+        resolved = entity.resolve_request("en-US", {})
+
+    assert resolved.language == "en-US"
+    assert resolved.options == {"voice": "normal", "format": "mp3"}
+    assert resolved.quiet_mode_active is False
 
 
 def test_unsupported_quiet_option(hass) -> None:
-    """A removed provider option fails gracefully before synthesis."""
+    """A removed optional quiet option falls back to normal TTS settings."""
     source = MockTTS()
     entry = make_entry(quiet=True, option="emotion")
     entity = AdaptiveTTSEntity(entry)
     attach(entity, hass, source)
-    with (
-        patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
-        pytest.raises(HomeAssistantError, match="not supported"),
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
     ):
-        entity.resolve_request("en-US", {})
+        resolved = entity.resolve_request("en-US", {})
+
+    assert resolved.language == "en-US"
+    assert resolved.options == {"voice": "normal", "format": "mp3"}
+    assert resolved.quiet_mode_active is False
 
 
 def test_runtime_voice_validation_uses_actual_language_for_legacy_entries(hass) -> None:
-    """Entries without quiet_language retain request-language validation behavior."""
+    """Legacy quiet voices invalid for the request language fall back safely."""
     source = MockTTS()
     source.async_get_supported_voices = lambda language: (
         [Voice("whisper", "Whisper")]
@@ -203,11 +209,14 @@ def test_runtime_voice_validation_uses_actual_language_for_legacy_entries(hass) 
     )
     entity = AdaptiveTTSEntity(make_entry(quiet=True, value="whisper"))
     attach(entity, hass, source)
-    with (
-        patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source),
-        pytest.raises(HomeAssistantError, match="for en-GB"),
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
     ):
-        entity.resolve_request("en-GB", {})
+        resolved = entity.resolve_request("en-GB", {})
+
+    assert resolved.language == "en-GB"
+    assert resolved.options == {"voice": "normal", "format": "mp3"}
+    assert resolved.quiet_mode_active is False
 
 
 @pytest.mark.asyncio
