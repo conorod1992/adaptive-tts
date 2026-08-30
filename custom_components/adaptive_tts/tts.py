@@ -82,6 +82,7 @@ class PolicySnapshot:
     quiet_option: str
     quiet_language: str | None
     quiet_value: str
+    quiet_cache_epoch: str | None = None
     override_scope: str | None = None
     voice_override: VoiceOverride | None = None
 
@@ -168,6 +169,11 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         self._next_voice_override: VoiceOverride | None = None
         self._override_store: Store[dict[str, str | None]] | None = None
         self._override_lock = asyncio.Lock()
+        # Quiet fallback can happen only after Home Assistant has already
+        # formed its cache key. Rotate this runtime epoch whenever that
+        # happens so fallback audio cannot be reused after policy recovery.
+        # A fresh epoch after restart also isolates old disk-cache entries.
+        self._quiet_cache_epoch = secrets.token_hex(8)
 
     async def async_load_voice_override(self, hass: HomeAssistant) -> None:
         """Load a valid persistent voice override without blocking entity setup."""
@@ -342,6 +348,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
     def _current_policy_snapshot(self, now: datetime | None = None) -> PolicySnapshot:
         """Capture the effective policy for a newly prepared TTS request."""
         config = self._config
+        quiet_mode_active = self.is_quiet_mode_active(now)
         override_scope: str | None = None
         voice_override: VoiceOverride | None = None
         if self._next_voice_override is not None:
@@ -353,10 +360,11 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
 
         return PolicySnapshot(
             underlying_entity_id=config[CONF_UNDERLYING_TTS_ENTITY],
-            quiet_mode_active=self.is_quiet_mode_active(now),
+            quiet_mode_active=quiet_mode_active,
             quiet_option=config[CONF_QUIET_OPTION],
             quiet_language=config.get(CONF_QUIET_LANGUAGE),
             quiet_value=config[CONF_QUIET_VALUE],
+            quiet_cache_epoch=(self._quiet_cache_epoch if quiet_mode_active else None),
             override_scope=override_scope,
             voice_override=voice_override,
         )
@@ -371,6 +379,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             "quiet_option": snapshot.quiet_option,
             "quiet_language": snapshot.quiet_language,
             "quiet_value": snapshot.quiet_value,
+            "quiet_epoch": snapshot.quiet_cache_epoch,
             "override": None,
             # A one-shot override must not let two separately prepared streams
             # share the same HA cache entry before either one consumes it.
@@ -407,12 +416,17 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         quiet_option = payload.get("quiet_option")
         quiet_language = payload.get("quiet_language")
         quiet_value = payload.get("quiet_value")
+        quiet_cache_epoch = payload.get("quiet_epoch")
         if (
             not isinstance(underlying, str)
             or not isinstance(quiet, bool)
             or not isinstance(quiet_option, str)
             or not isinstance(quiet_value, str)
             or not (quiet_language is None or isinstance(quiet_language, str))
+            or not (
+                quiet_cache_epoch is None
+                or (isinstance(quiet_cache_epoch, str) and quiet_cache_epoch)
+            )
         ):
             raise HomeAssistantError("Invalid Adaptive TTS policy snapshot")
 
@@ -447,6 +461,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             quiet_option=quiet_option,
             quiet_language=quiet_language,
             quiet_value=quiet_value,
+            quiet_cache_epoch=quiet_cache_epoch,
             override_scope=override_scope,
             voice_override=voice_override,
         )
@@ -608,6 +623,14 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 self._persistent_voice_override = None
             if scope in (SCOPE_ALL, SCOPE_NEXT_REQUEST):
                 self._next_voice_override = None
+
+    def _invalidate_quiet_cache_epoch(self, snapshot: PolicySnapshot) -> None:
+        """Keep degraded quiet audio out of future recovered cache entries."""
+        if (
+            snapshot.quiet_cache_epoch is None
+            or snapshot.quiet_cache_epoch == self._quiet_cache_epoch
+        ):
+            self._quiet_cache_epoch = secrets.token_hex(8)
 
     def _override_from_snapshot(self, snapshot: PolicySnapshot) -> VoiceOverride | None:
         """Return the explicit override captured for this request."""
@@ -809,6 +832,9 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                         f"Language '{effective_language}' is not supported by "
                         f"{snapshot.underlying_entity_id}"
                     )
+
+        if snapshot.quiet_mode_active and not quiet_active:
+            self._invalidate_quiet_cache_epoch(snapshot)
 
         if explicit_override is not None:
             if "voice" not in (underlying.supported_options or []):
