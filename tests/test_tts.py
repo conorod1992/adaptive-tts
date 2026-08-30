@@ -262,9 +262,7 @@ async def test_manager_cache_separates_normal_and_quiet_policy(hass, tmp_path) -
         return "mp3", options["voice"].encode()
 
     source.async_get_tts_audio = audio_for_voice
-    entity = AdaptiveTTSEntity(
-        make_entry(quiet=True, start="23:00:00", end="07:00:00")
-    )
+    entity = AdaptiveTTSEntity(make_entry(quiet=True, start="23:00:00", end="07:00:00"))
     attach(entity, hass, source)
     now = [datetime(2026, 8, 29, 12, 0)]
 
