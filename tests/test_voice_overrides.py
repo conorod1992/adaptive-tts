@@ -1,5 +1,6 @@
 """Tests for Adaptive TTS voice override actions."""
 
+import asyncio
 from typing import Any, ClassVar
 from unittest.mock import patch
 
@@ -369,3 +370,57 @@ async def test_action_override_changes_cache_fingerprint(hass) -> None:
         persistent = entity.default_options[CACHE_POLICY_OPTION]
         assert persistent != baseline
         assert persistent != one_shot
+
+
+@pytest.mark.asyncio
+async def test_concurrent_synthesis_claims_next_request_override_once(hass) -> None:
+    """Concurrent synthesis tasks cannot both claim one next-request override."""
+    source = OverrideTTS()
+    entity = AdaptiveTTSEntity(make_entry())
+    attach(entity, hass, source)
+
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity", return_value=source
+    ):
+        await entity.async_set_voice_override(
+            "en-GB", "cheerful-gb", DURATION_NEXT_REQUEST
+        )
+        first_policy = entity.default_options[CACHE_POLICY_OPTION]
+        second_policy = entity.default_options[CACHE_POLICY_OPTION]
+
+        # Force both synthesis tasks into the contention window. Before the fix,
+        # both resolve the pending token before either can acquire the lock to
+        # consume it. The fixed path acquires the lock before resolution/claim.
+        await entity._override_lock.acquire()
+        try:
+            first_task = asyncio.create_task(
+                entity.async_get_tts_audio(
+                    "First concurrent request",
+                    "en-US",
+                    {CACHE_POLICY_OPTION: first_policy},
+                )
+            )
+            second_task = asyncio.create_task(
+                entity.async_get_tts_audio(
+                    "Second concurrent request",
+                    "en-US",
+                    {CACHE_POLICY_OPTION: second_policy},
+                )
+            )
+            await asyncio.sleep(0)
+            assert not first_task.done()
+            assert not second_task.done()
+        finally:
+            entity._override_lock.release()
+
+        first_result, second_result = await asyncio.gather(first_task, second_task)
+
+    assert sorted((first_result[1], second_result[1])) == [
+        b"cheerful-gb",
+        b"whisper-gb",
+    ]
+    assert entity.next_voice_override is None
+    assert sorted(call[2]["voice"] for call in source.calls) == [
+        "cheerful-gb",
+        "whisper-gb",
+    ]
