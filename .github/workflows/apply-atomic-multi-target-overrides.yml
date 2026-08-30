@@ -26,95 +26,25 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected one match, got {count}")
-              return text.replace(old, new, 1)
-
-          # TTS entity: add exact-state staging helpers so multi-target services can
-          # persist all targets first and only publish in-memory state after success.
           path = Path("custom_components/adaptive_tts/tts.py")
           text = path.read_text(encoding="utf-8")
+          marker = "@dataclass(frozen=True, slots=True)\nclass PolicySnapshot:\n"
+          if text.count(marker) != 1:
+              raise SystemExit("PolicySnapshot marker missing or ambiguous")
+          text = text.replace(
+              marker,
+              "@dataclass(frozen=True, slots=True)\n"
+              "class _VoiceOverrideState:\n"
+              "    \"\"\"Exact override state used by multi-target transactions.\"\"\"\n\n"
+              "    persistent: VoiceOverride | None\n"
+              "    next_request: VoiceOverride | None\n\n\n"
+              + marker,
+              1,
+          )
 
-          old = '''@dataclass(frozen=True, slots=True)
-          class PolicySnapshot:
-          '''
-          new = '''@dataclass(frozen=True, slots=True)
-          class _VoiceOverrideState:
-              """Exact in-memory override state used by service transactions."""
-
-              persistent: VoiceOverride | None
-              next_request: VoiceOverride | None
-
-
-          @dataclass(frozen=True, slots=True)
-          class PolicySnapshot:
-          '''
-          text = replace_once(text, old, new, "override state dataclass")
-
-          old = '''    async def async_set_voice_override(
-              self, language: str | None, voice: str, duration: str
-          ) -> None:
-              """Set a one-shot or persistent voice override."""
-              override = self.validate_voice_override(language, voice)
-              if duration not in (DURATION_NEXT_REQUEST, DURATION_UNTIL_CHANGED):
-                  raise HomeAssistantError(f"Unsupported voice override duration: {duration}")
-
-              async with self._override_lock:
-                  if duration == DURATION_NEXT_REQUEST:
-                      self._next_voice_override = VoiceOverride(
-                          voice=override.voice,
-                          language=override.language,
-                          token=secrets.token_hex(8),
-                      )
-                      return
-
-                  if self._override_store is None:
-                      raise HomeAssistantError(
-                          "Adaptive TTS voice override storage is unavailable"
-                      )
-                  persistent = VoiceOverride(
-                      voice=override.voice,
-                      language=override.language,
-                      token=secrets.token_hex(8),
-                  )
-                  await self._override_store.async_save(
-                      {
-                          "underlying_entity_id": self.underlying_entity_id,
-                          "language": persistent.language,
-                          "voice": persistent.voice,
-                          "token": persistent.token,
-                      }
-                  )
-                  self._persistent_voice_override = persistent
-
-              async def async_clear_voice_override(self, scope: str = SCOPE_ALL) -> None:
-                  """Clear one-shot and/or persistent voice overrides."""
-                  if scope not in (SCOPE_ALL, SCOPE_NEXT_REQUEST, SCOPE_PERSISTENT):
-                      raise HomeAssistantError(f"Unsupported voice override scope: {scope}")
-
-                  async with self._override_lock:
-                      if scope in (SCOPE_ALL, SCOPE_PERSISTENT):
-                          if self._override_store is not None:
-                              await self._override_store.async_remove()
-                          self._persistent_voice_override = None
-                      if scope in (SCOPE_ALL, SCOPE_NEXT_REQUEST):
-                          self._next_voice_override = None
-          '''
-          # Dedent accidental leading spaces from the embedded reference before matching.
-          old = old.replace("\n              async def async_clear", "\n    async def async_clear")
-          old = old.replace("\n                  \"\"\"Clear", "\n        \"\"\"Clear")
-          old = old.replace("\n                  if scope", "\n        if scope")
-          old = old.replace("\n                      raise HomeAssistantError", "\n            raise HomeAssistantError")
-          old = old.replace("\n\n                  async with", "\n\n        async with")
-          old = old.replace("\n                      if scope", "\n            if scope")
-          old = old.replace("\n                          if self._override_store", "\n                if self._override_store")
-          old = old.replace("\n                              await self._override_store", "\n                    await self._override_store")
-          old = old.replace("\n                          self._persistent", "\n                self._persistent")
-          old = old.replace("\n                          self._next", "\n                self._next")
-
-          new = '''    def _voice_override_state(self) -> _VoiceOverrideState:
+          start = text.index("    async def async_set_voice_override(")
+          end = text.index("    def _invalidate_quiet_cache_epoch(", start)
+          replacement = '''    def _voice_override_state(self) -> _VoiceOverrideState:
               """Capture exact override state while the override lock is held."""
               return _VoiceOverrideState(
                   persistent=self._persistent_voice_override,
@@ -124,7 +54,7 @@ jobs:
               def _voice_override_state_with_set(
                   self, override: VoiceOverride, duration: str
               ) -> _VoiceOverrideState:
-                  """Build a desired override state without publishing it yet."""
+                  """Build desired Set state without publishing it yet."""
                   current = self._voice_override_state()
                   if duration == DURATION_NEXT_REQUEST:
                       return _VoiceOverrideState(
@@ -145,7 +75,7 @@ jobs:
                   )
 
               def _voice_override_state_with_clear(self, scope: str) -> _VoiceOverrideState:
-                  """Build a desired cleared state without publishing it yet."""
+                  """Build desired Clear state without publishing it yet."""
                   current = self._voice_override_state()
                   return _VoiceOverrideState(
                       persistent=(
@@ -163,7 +93,7 @@ jobs:
               async def _async_write_persistent_voice_override_locked(
                   self, override: VoiceOverride | None
               ) -> None:
-                  """Persist exact persistent state without changing in-memory state."""
+                  """Persist exact state without publishing in-memory state."""
                   if override is None:
                       if self._override_store is not None:
                           await self._override_store.async_remove()
@@ -222,47 +152,137 @@ jobs:
                               desired.persistent
                           )
                       self._apply_voice_override_state_locked(desired)
+
           '''
-          # Normalize indentation of embedded class methods.
-          new = new.replace("\n              def ", "\n    def ")
-          new = new.replace("\n              async def ", "\n    async def ")
-          new = new.replace("\n                  ", "\n        ")
-          new = new.replace("\n                      ", "\n            ")
-          new = new.replace("\n                          ", "\n                ")
-          new = new.replace("\n                              ", "\n                    ")
-          text = replace_once(text, old, new, "override mutation methods")
+          # The YAML indentation becomes part of the Python literal; normalize only
+          # the common extra indentation introduced inside this heredoc.
+          replacement = replacement.replace("\n              ", "\n    ")
+          replacement = replacement.replace("\n                  ", "\n        ")
+          replacement = replacement.replace("\n                      ", "\n            ")
+          replacement = replacement.replace("\n                          ", "\n                ")
+          replacement = replacement.replace("\n                              ", "\n                    ")
+          text = text[:start] + replacement + text[end:]
           path.write_text(text, encoding="utf-8")
 
-          # Services: acquire every target lock in deterministic order, stage storage
-          # writes, roll back exact persisted states on any failure, then publish all
-          # in-memory states synchronously only after every target is durable.
-          path = Path("custom_components/adaptive_tts/services.py")
-          text = path.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              "from collections.abc import Iterable\n\nimport voluptuous as vol\n",
-              "from collections.abc import Iterable\nfrom contextlib import AsyncExitStack\nimport logging\n\nimport voluptuous as vol\n",
-              "service imports",
-          )
-          text = replace_once(
-              text,
-              "from homeassistant.exceptions import ServiceValidationError\n",
-              "from homeassistant.exceptions import HomeAssistantError, ServiceValidationError\n",
-              "service HA errors import",
-          )
-          text = replace_once(
-              text,
-              ")\n\n_SET_SCHEMA = vol.Schema(\n",
-              ")\n\n_LOGGER = logging.getLogger(__name__)\n\n_SET_SCHEMA = vol.Schema(\n",
-              "service logger",
+          Path("custom_components/adaptive_tts/services.py").write_text('''"""Service actions for Adaptive TTS."""
+
+          from __future__ import annotations
+
+          import logging
+          from collections.abc import Iterable
+          from contextlib import AsyncExitStack
+
+          import voluptuous as vol
+          from homeassistant.const import ATTR_ENTITY_ID
+          from homeassistant.core import HomeAssistant, ServiceCall
+          from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+          from homeassistant.helpers import config_validation as cv
+          from homeassistant.helpers import entity_registry as er
+
+          from .const import (
+              ATTR_DURATION,
+              ATTR_LANGUAGE,
+              ATTR_SCOPE,
+              ATTR_VOICE,
+              DATA_ENTITIES,
+              DOMAIN,
+              DURATION_NEXT_REQUEST,
+              DURATION_UNTIL_CHANGED,
+              SCOPE_ALL,
+              SCOPE_NEXT_REQUEST,
+              SCOPE_PERSISTENT,
+              SERVICE_CLEAR_VOICE_OVERRIDE,
+              SERVICE_SET_VOICE_OVERRIDE,
           )
 
-          marker = '''def async_register_services(hass: HomeAssistant) -> None:
-              """Register Adaptive TTS actions."""
-          '''
-          marker = marker.replace("\n              \"\"\"", "\n    \"\"\"")
-          helpers = '''async def _async_commit_override_states(states) -> None:
-              """Persist every target, roll back on failure, then publish atomically."""
+          _LOGGER = logging.getLogger(__name__)
+
+          _SET_SCHEMA = vol.Schema(
+              {
+                  vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+                  vol.Required(ATTR_LANGUAGE): cv.string,
+                  vol.Required(ATTR_VOICE): cv.string,
+                  vol.Optional(ATTR_DURATION, default=DURATION_NEXT_REQUEST): vol.In(
+                      (DURATION_NEXT_REQUEST, DURATION_UNTIL_CHANGED)
+                  ),
+              }
+          )
+
+          _CLEAR_SCHEMA = vol.Schema(
+              {
+                  vol.Required(ATTR_ENTITY_ID): cv.entity_ids,
+                  vol.Optional(ATTR_SCOPE, default=SCOPE_ALL): vol.In(
+                      (SCOPE_ALL, SCOPE_NEXT_REQUEST, SCOPE_PERSISTENT)
+                  ),
+              }
+          )
+
+
+          def _resolve_entities(hass: HomeAssistant, entity_ids: Iterable[str]):
+              """Resolve targeted Adaptive TTS entities, including renamed entities."""
+              registry = er.async_get(hass)
+              entities_by_entry = hass.data[DOMAIN][DATA_ENTITIES]
+              resolved = []
+              missing = []
+
+              for entity_id in entity_ids:
+                  registry_entry = registry.async_get(entity_id)
+                  entity = None
+                  if (
+                      registry_entry is not None
+                      and registry_entry.platform == DOMAIN
+                      and registry_entry.config_entry_id is not None
+                  ):
+                      entity = entities_by_entry.get(registry_entry.config_entry_id)
+                  if entity is None:
+                      entity = next(
+                          (
+                              candidate
+                              for candidate in entities_by_entry.values()
+                              if getattr(candidate, "entity_id", None) == entity_id
+                          ),
+                          None,
+                      )
+                  if entity is None:
+                      missing.append(entity_id)
+                  else:
+                      resolved.append(entity)
+
+              if missing:
+                  raise ServiceValidationError(
+                      "Not an available Adaptive TTS entity: " + ", ".join(missing)
+                  )
+              return resolved
+
+
+          def _validate_voice_override_targets(entities, language: str, voice: str) -> None:
+              """Validate all targets before mutating any target."""
+              for entity in entities:
+                  entity.validate_voice_override(language, voice)
+
+
+          def _unique_entities(entities):
+              """Deduplicate targets by identity while preserving caller order."""
+              unique = []
+              seen = set()
+              for entity in entities:
+                  identity = id(entity)
+                  if identity in seen:
+                      continue
+                  seen.add(identity)
+                  unique.append(entity)
+              return unique
+
+
+          def _entity_label(entity) -> str:
+              """Return a stable label for rollback diagnostics."""
+              return getattr(entity, "entity_id", None) or getattr(
+                  getattr(entity, "_entry", None), "entry_id", "unknown"
+              )
+
+
+          async def _async_commit_override_states(states) -> None:
+              """Persist all targets, roll back on failure, then publish states."""
               attempted = []
               try:
                   for entity, original, desired in states:
@@ -280,13 +300,11 @@ jobs:
                               original.persistent
                           )
                       except Exception as rollback_err:
-                          rollback_failures.append(
-                              getattr(entity, "entity_id", None)
-                              or getattr(entity._entry, "entry_id", "unknown")
-                          )
+                          label = _entity_label(entity)
+                          rollback_failures.append(label)
                           _LOGGER.error(
                               "Failed to roll back voice override storage for %s: %s",
-                              rollback_failures[-1],
+                              label,
                               rollback_err,
                           )
                   if rollback_failures and isinstance(err, Exception):
@@ -304,7 +322,7 @@ jobs:
               entities, language: str, voice: str, duration: str
           ) -> None:
               """Apply one Set override action atomically across all targets."""
-              entities = list(dict.fromkeys(entities))
+              entities = _unique_entities(entities)
               _validate_voice_override_targets(entities, language, voice)
               async with AsyncExitStack() as stack:
                   for entity in sorted(entities, key=id):
@@ -323,7 +341,7 @@ jobs:
 
           async def _async_clear_voice_override_targets(entities, scope: str) -> None:
               """Apply one Clear override action atomically across all targets."""
-              entities = list(dict.fromkeys(entities))
+              entities = _unique_entities(entities)
               async with AsyncExitStack() as stack:
                   for entity in sorted(entities, key=id):
                       await stack.enter_async_context(entity._override_lock)
@@ -338,66 +356,55 @@ jobs:
 
           def async_register_services(hass: HomeAssistant) -> None:
               """Register Adaptive TTS actions."""
-          '''
-          helpers = helpers.replace("\n              ", "\n    ")
-          helpers = helpers.replace("\n                  ", "\n        ")
-          helpers = helpers.replace("\n                      ", "\n            ")
-          helpers = helpers.replace("\n                          ", "\n                ")
-          text = replace_once(text, marker, helpers, "service transaction helpers")
 
-          old = '''        _validate_voice_override_targets(entities, language, voice)
-                  for entity in entities:
-                      await entity.async_set_voice_override(language, voice, duration)
-          '''
-          old = old.replace("\n                  for", "\n        for").replace("\n                      await", "\n            await")
-          text = replace_once(
-              text,
-              old,
-              "        await _async_set_voice_override_targets(\n"
-              "            entities, language, voice, duration\n"
-              "        )\n",
-              "set service handler",
-          )
-          old = '''        for entity in entities:
-                  await entity.async_clear_voice_override(scope)
-          '''
-          old = old.replace("\n                  await", "\n            await")
-          text = replace_once(
-              text,
-              old,
-              "        await _async_clear_voice_override_targets(entities, scope)\n",
-              "clear service handler",
-          )
-          path.write_text(text, encoding="utf-8")
+              async def _set_voice_override(call: ServiceCall) -> None:
+                  entities = _resolve_entities(hass, call.data[ATTR_ENTITY_ID])
+                  await _async_set_voice_override_targets(
+                      entities,
+                      call.data[ATTR_LANGUAGE],
+                      call.data[ATTR_VOICE],
+                      call.data[ATTR_DURATION],
+                  )
 
-          # Regression tests for partial storage writes on both Set and Clear.
-          path = Path("tests/test_backend_robustness.py")
-          text = path.read_text(encoding="utf-8")
-          text = replace_once(
-              text,
-              "from custom_components.adaptive_tts.services import _validate_voice_override_targets\n",
-              "from custom_components.adaptive_tts.services import (\n"
-              "    _async_clear_voice_override_targets,\n"
-              "    _async_set_voice_override_targets,\n"
-              "    _validate_voice_override_targets,\n"
-              ")\n",
-              "test service imports",
+              async def _clear_voice_override(call: ServiceCall) -> None:
+                  entities = _resolve_entities(hass, call.data[ATTR_ENTITY_ID])
+                  await _async_clear_voice_override_targets(entities, call.data[ATTR_SCOPE])
+
+              hass.services.async_register(
+                  DOMAIN,
+                  SERVICE_SET_VOICE_OVERRIDE,
+                  _set_voice_override,
+                  schema=_SET_SCHEMA,
+              )
+              hass.services.async_register(
+                  DOMAIN,
+                  SERVICE_CLEAR_VOICE_OVERRIDE,
+                  _clear_voice_override,
+                  schema=_CLEAR_SCHEMA,
+              )
+          '''.replace("\n          ", "\n"), encoding="utf-8")
+
+          Path("tests/test_service_transactions.py").write_text('''"""Regression tests for atomic multi-target override services."""
+
+          from unittest.mock import patch
+
+          import pytest
+
+          from custom_components.adaptive_tts.const import (
+              DURATION_UNTIL_CHANGED,
+              SCOPE_ALL,
           )
-          text = replace_once(
-              text,
-              "from custom_components.adaptive_tts.tts import (\n    AdaptiveTTSEntity,\n    async_remove_voice_override_storage,\n)\n",
-              "from custom_components.adaptive_tts.tts import (\n"
-              "    AdaptiveTTSEntity,\n"
-              "    VoiceOverride,\n"
-              "    async_remove_voice_override_storage,\n"
-              ")\n",
-              "test tts imports",
+          from custom_components.adaptive_tts.services import (
+              _async_clear_voice_override_targets,
+              _async_set_voice_override_targets,
           )
-          insert_marker = '''@pytest.mark.asyncio
-          async def test_preview_rejects_missing_provider_before_stream_allocation(hass) -> None:
-          '''
-          insert_marker = insert_marker.replace("\n          async def", "\nasync def")
-          new_tests = '''class _TransactionalStore:
+          from custom_components.adaptive_tts.tts import AdaptiveTTSEntity, VoiceOverride
+
+          from .test_backend_robustness import attach, make_entry
+          from .test_tts import MockTTS
+
+
+          class _TransactionalStore:
               """Store stub that can fail after a partial persistent write."""
 
               def __init__(self, data, *, fail_save_voice=None, fail_remove=False):
@@ -427,9 +434,15 @@ jobs:
               }
 
 
+          def _seed_state(entity, persistent, next_request, store):
+              entity._persistent_voice_override = persistent
+              entity._next_voice_override = next_request
+              entity._override_store = store
+
+
           @pytest.mark.asyncio
-          async def test_multi_target_persistent_set_rolls_back_partial_storage(hass) -> None:
-              """A later Set failure restores exact state for every attempted target."""
+          async def test_persistent_set_rolls_back_partial_multi_target_write(hass) -> None:
+              """A later Set failure restores every attempted target exactly."""
               source = MockTTS()
               first = AdaptiveTTSEntity(make_entry(entry_id="first"))
               second = AdaptiveTTSEntity(make_entry(entry_id="second"))
@@ -439,16 +452,12 @@ jobs:
               old_second = VoiceOverride("normal", "en-US", "persist-second")
               next_first = VoiceOverride("whisper", "en-US", "next-first")
               next_second = VoiceOverride("whisper", "en-US", "next-second")
-              first._persistent_voice_override = old_first
-              second._persistent_voice_override = old_second
-              first._next_voice_override = next_first
-              second._next_voice_override = next_second
               first_store = _TransactionalStore(_stored_override(first, old_first))
               second_store = _TransactionalStore(
                   _stored_override(second, old_second), fail_save_voice="whisper"
               )
-              first._override_store = first_store
-              second._override_store = second_store
+              _seed_state(first, old_first, next_first, first_store)
+              _seed_state(second, old_second, next_second, second_store)
 
               with (
                   patch(
@@ -470,7 +479,7 @@ jobs:
 
 
           @pytest.mark.asyncio
-          async def test_multi_target_clear_rolls_back_partial_storage(hass) -> None:
+          async def test_clear_rolls_back_partial_multi_target_write(hass) -> None:
               """A later Clear failure restores persistent and one-shot state exactly."""
               first = AdaptiveTTSEntity(make_entry(entry_id="first"))
               second = AdaptiveTTSEntity(make_entry(entry_id="second"))
@@ -478,16 +487,12 @@ jobs:
               old_second = VoiceOverride("normal", "en-US", "persist-second")
               next_first = VoiceOverride("whisper", "en-US", "next-first")
               next_second = VoiceOverride("whisper", "en-US", "next-second")
-              first._persistent_voice_override = old_first
-              second._persistent_voice_override = old_second
-              first._next_voice_override = next_first
-              second._next_voice_override = next_second
               first_store = _TransactionalStore(_stored_override(first, old_first))
               second_store = _TransactionalStore(
                   _stored_override(second, old_second), fail_remove=True
               )
-              first._override_store = first_store
-              second._override_store = second_store
+              _seed_state(first, old_first, next_first, first_store)
+              _seed_state(second, old_second, next_second, second_store)
 
               with pytest.raises(RuntimeError, match="simulated remove failure"):
                   await _async_clear_voice_override_targets([first, second], SCOPE_ALL)
@@ -501,8 +506,8 @@ jobs:
 
 
           @pytest.mark.asyncio
-          async def test_multi_target_persistent_set_publishes_only_after_all_storage(hass) -> None:
-              """Successful Set commits every target after all persistent writes succeed."""
+          async def test_persistent_set_commits_all_targets_after_storage_succeeds(hass) -> None:
+              """Successful multi-target Set publishes every prepared state."""
               source = MockTTS()
               first = AdaptiveTTSEntity(make_entry(entry_id="first"))
               second = AdaptiveTTSEntity(make_entry(entry_id="second"))
@@ -525,17 +530,7 @@ jobs:
               assert second.persistent_voice_override.voice == "whisper"
               assert first._override_store.data["token"] == first.persistent_voice_override.token
               assert second._override_store.data["token"] == second.persistent_voice_override.token
-
-
-          @pytest.mark.asyncio
-          async def test_preview_rejects_missing_provider_before_stream_allocation(hass) -> None:
-          '''
-          new_tests = new_tests.replace("\n              ", "\n    ")
-          new_tests = new_tests.replace("\n                  ", "\n        ")
-          new_tests = new_tests.replace("\n                      ", "\n            ")
-          new_tests = new_tests.replace("\n                          ", "\n                ")
-          text = replace_once(text, insert_marker, new_tests, "transaction test insertion")
-          path.write_text(text, encoding="utf-8")
+          '''.replace("\n          ", "\n"), encoding="utf-8")
 
           for filename in (
               "custom_components/adaptive_tts/const.py",
@@ -546,8 +541,7 @@ jobs:
               if version_text.count("0.2.11") != 1:
                   raise SystemExit(f"Unexpected version occurrences in {filename}")
               version_path.write_text(
-                  version_text.replace("0.2.11", "0.2.12", 1),
-                  encoding="utf-8",
+                  version_text.replace("0.2.11", "0.2.12", 1), encoding="utf-8"
               )
 
           Path(".github/workflows/apply-atomic-multi-target-overrides.yml").unlink()
@@ -558,7 +552,7 @@ jobs:
 
       - name: Format and validate
         run: |
-          python -m ruff format custom_components/adaptive_tts/tts.py custom_components/adaptive_tts/services.py tests/test_backend_robustness.py
+          python -m ruff format custom_components/adaptive_tts/tts.py custom_components/adaptive_tts/services.py tests/test_service_transactions.py
           node --test tests/frontend.test.mjs
           python -m pytest
           python -m ruff check .
