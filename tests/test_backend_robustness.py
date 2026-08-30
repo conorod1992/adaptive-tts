@@ -1,7 +1,6 @@
 """Regression tests for Adaptive TTS backend robustness."""
 
 import asyncio
-from importlib import import_module
 from unittest.mock import patch
 
 import pytest
@@ -20,9 +19,9 @@ from custom_components.adaptive_tts.const import (
     SCOPE_ALL,
 )
 from custom_components.adaptive_tts.preview import (
+    _engine_infos,
     create_preview,
     websocket_engine,
-    websocket_info,
 )
 from custom_components.adaptive_tts.services import _validate_voice_override_targets
 from custom_components.adaptive_tts.tts import (
@@ -245,33 +244,20 @@ def test_websocket_engine_contains_broken_provider_metadata(hass) -> None:
     assert "broken metadata" in connection.error[2]
 
 
-def test_websocket_info_skips_one_broken_provider(hass) -> None:
-    """One broken custom provider does not prevent the panel listing others."""
+def test_provider_listing_skips_one_broken_provider(hass) -> None:
+    """One broken custom provider does not prevent listing healthy providers."""
     hass.states.async_set("tts.good", "unknown")
     hass.states.async_set("tts.broken", "unknown")
-    connection = FakeConnection()
-    assist_pipeline = import_module("homeassistant.components.assist_pipeline")
 
     def info(_hass, engine_id, _language):
         if engine_id == "tts.broken":
             raise RuntimeError("broken metadata")
         return {"engine_id": engine_id}
 
-    with (
-        patch.object(assist_pipeline, "async_get_pipelines", return_value=[]),
-        patch("custom_components.adaptive_tts.preview._engine_info", side_effect=info),
-    ):
-        websocket_info.__wrapped__(
-            hass,
-            connection,
-            {"id": 10},
-        )
+    with patch("custom_components.adaptive_tts.preview._engine_info", side_effect=info):
+        engines = _engine_infos(hass)
 
-    assert connection.error is None
-    assert connection.result == (
-        10,
-        {"pipelines": [], "engines": [{"engine_id": "tts.good"}]},
-    )
+    assert engines == [{"engine_id": "tts.good"}]
 
 
 def test_engine_metadata_distinguishes_none_from_empty_voice_list(hass) -> None:
