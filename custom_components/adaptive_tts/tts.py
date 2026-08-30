@@ -449,9 +449,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                     f"{self.underlying_entity_id}"
                 )
             voices = underlying.async_get_supported_voices(language)
-            if voices is not None and voice not in {
-                item.voice_id for item in voices
-            }:
+            if voices is not None and voice not in {item.voice_id for item in voices}:
                 raise HomeAssistantError(
                     f"Voice '{voice}' is not supported by "
                     f"{self.underlying_entity_id} for {language}"
@@ -694,15 +692,11 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         """Resolve a synthesis request and clear a failing explicit override."""
         snapshot = self._policy_snapshot_from_options(options)
         request_override = self._override_from_snapshot(snapshot)
-        request_scope = (
-            snapshot.override_scope if request_override is not None else None
-        )
+        request_scope = snapshot.override_scope if request_override is not None else None
         try:
             resolved = self._resolve_request_with_snapshot(language, options, snapshot)
         except Exception:
-            await self._async_clear_failed_voice_override(
-                request_override, request_scope
-            )
+            await self._async_clear_failed_voice_override(request_override, request_scope)
             raise
         await self._async_consume_next_voice_override(
             resolved.voice_override, resolved.voice_override_scope
