@@ -8,9 +8,10 @@ from homeassistant.components import panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -78,6 +79,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    @callback
+    def _async_underlying_state_changed(_event) -> None:
+        """Publish wrapper availability when the provider state changes."""
+        entity = (
+            hass.data.get(DOMAIN, {}).get(DATA_ENTITIES, {}).get(entry.entry_id)
+        )
+        if entity is not None:
+            entity.async_write_ha_state()
+
+    entry.async_on_unload(
+        async_track_state_change_event(
+            hass, underlying_entity_id, _async_underlying_state_changed
+        )
+    )
     return True
 
 
