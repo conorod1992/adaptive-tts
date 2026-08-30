@@ -74,6 +74,14 @@ class VoiceOverride:
 
 
 @dataclass(frozen=True, slots=True)
+class _VoiceOverrideState:
+    """Exact override state used by multi-target transactions."""
+
+    persistent: VoiceOverride | None
+    next_request: VoiceOverride | None
+
+
+@dataclass(frozen=True, slots=True)
 class PolicySnapshot:
     """Policy state captured when Home Assistant prepares a TTS request."""
 
@@ -575,6 +583,76 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 )
         return VoiceOverride(voice=voice, language=language)
 
+    def _voice_override_state(self) -> _VoiceOverrideState:
+        """Capture exact override state while the override lock is held."""
+        return _VoiceOverrideState(
+            persistent=self._persistent_voice_override,
+            next_request=self._next_voice_override,
+        )
+
+    def _voice_override_state_with_set(
+        self, override: VoiceOverride, duration: str
+    ) -> _VoiceOverrideState:
+        """Build desired Set state without publishing it yet."""
+        current = self._voice_override_state()
+        if duration == DURATION_NEXT_REQUEST:
+            return _VoiceOverrideState(
+                persistent=current.persistent,
+                next_request=VoiceOverride(
+                    voice=override.voice,
+                    language=override.language,
+                    token=secrets.token_hex(8),
+                ),
+            )
+        return _VoiceOverrideState(
+            persistent=VoiceOverride(
+                voice=override.voice,
+                language=override.language,
+                token=secrets.token_hex(8),
+            ),
+            next_request=current.next_request,
+        )
+
+    def _voice_override_state_with_clear(self, scope: str) -> _VoiceOverrideState:
+        """Build desired Clear state without publishing it yet."""
+        current = self._voice_override_state()
+        return _VoiceOverrideState(
+            persistent=(
+                None if scope in (SCOPE_ALL, SCOPE_PERSISTENT) else current.persistent
+            ),
+            next_request=(
+                None
+                if scope in (SCOPE_ALL, SCOPE_NEXT_REQUEST)
+                else current.next_request
+            ),
+        )
+
+    async def _async_write_persistent_voice_override_locked(
+        self, override: VoiceOverride | None
+    ) -> None:
+        """Persist exact state without publishing in-memory state."""
+        if override is None:
+            if self._override_store is not None:
+                await self._override_store.async_remove()
+            return
+        if self._override_store is None:
+            raise HomeAssistantError(
+                "Adaptive TTS voice override storage is unavailable"
+            )
+        await self._override_store.async_save(
+            {
+                "underlying_entity_id": self.underlying_entity_id,
+                "language": override.language,
+                "voice": override.voice,
+                "token": override.token,
+            }
+        )
+
+    def _apply_voice_override_state_locked(self, state: _VoiceOverrideState) -> None:
+        """Publish a fully prepared override state without awaiting."""
+        self._persistent_voice_override = state.persistent
+        self._next_voice_override = state.next_request
+
     async def async_set_voice_override(
         self, language: str | None, voice: str, duration: str
     ) -> None:
@@ -584,32 +662,13 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(f"Unsupported voice override duration: {duration}")
 
         async with self._override_lock:
-            if duration == DURATION_NEXT_REQUEST:
-                self._next_voice_override = VoiceOverride(
-                    voice=override.voice,
-                    language=override.language,
-                    token=secrets.token_hex(8),
+            original = self._voice_override_state()
+            desired = self._voice_override_state_with_set(override, duration)
+            if original.persistent != desired.persistent:
+                await self._async_write_persistent_voice_override_locked(
+                    desired.persistent
                 )
-                return
-
-            if self._override_store is None:
-                raise HomeAssistantError(
-                    "Adaptive TTS voice override storage is unavailable"
-                )
-            persistent = VoiceOverride(
-                voice=override.voice,
-                language=override.language,
-                token=secrets.token_hex(8),
-            )
-            await self._override_store.async_save(
-                {
-                    "underlying_entity_id": self.underlying_entity_id,
-                    "language": persistent.language,
-                    "voice": persistent.voice,
-                    "token": persistent.token,
-                }
-            )
-            self._persistent_voice_override = persistent
+            self._apply_voice_override_state_locked(desired)
 
     async def async_clear_voice_override(self, scope: str = SCOPE_ALL) -> None:
         """Clear one-shot and/or persistent voice overrides."""
@@ -617,12 +676,13 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             raise HomeAssistantError(f"Unsupported voice override scope: {scope}")
 
         async with self._override_lock:
-            if scope in (SCOPE_ALL, SCOPE_PERSISTENT):
-                if self._override_store is not None:
-                    await self._override_store.async_remove()
-                self._persistent_voice_override = None
-            if scope in (SCOPE_ALL, SCOPE_NEXT_REQUEST):
-                self._next_voice_override = None
+            original = self._voice_override_state()
+            desired = self._voice_override_state_with_clear(scope)
+            if original.persistent != desired.persistent:
+                await self._async_write_persistent_voice_override_locked(
+                    desired.persistent
+                )
+            self._apply_voice_override_state_locked(desired)
 
     def _invalidate_quiet_cache_epoch(self, snapshot: PolicySnapshot) -> None:
         """Keep degraded quiet audio out of future recovered cache entries."""
