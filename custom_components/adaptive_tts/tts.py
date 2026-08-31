@@ -590,21 +590,38 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             language = language.strip()
 
         underlying = self._underlying
-        if underlying is None or not underlying.available:
+        if underlying is None:
             raise HomeAssistantError(
                 f"Underlying TTS entity {self.underlying_entity_id} is unavailable"
             )
-        if "voice" not in (underlying.supported_options or []):
+        try:
+            available = underlying.available
+            supported_options = underlying.supported_options or []
+            supported_languages = list(underlying.supported_languages)
+            voices = (
+                underlying.async_get_supported_voices(language)
+                if language is not None
+                else None
+            )
+        except Exception as err:
+            raise HomeAssistantError(
+                "Could not read TTS provider metadata from "
+                f"{self.underlying_entity_id}: {err}"
+            ) from err
+        if not available:
+            raise HomeAssistantError(
+                f"Underlying TTS entity {self.underlying_entity_id} is unavailable"
+            )
+        if "voice" not in supported_options:
             raise HomeAssistantError(
                 f"{self.underlying_entity_id} does not support voice overrides"
             )
         if language is not None:
-            if language not in underlying.supported_languages:
+            if language not in supported_languages:
                 raise HomeAssistantError(
                     f"Language '{language}' is not supported by "
                     f"{self.underlying_entity_id}"
                 )
-            voices = underlying.async_get_supported_voices(language)
             if voices is not None and voice not in {item.voice_id for item in voices}:
                 raise HomeAssistantError(
                     f"Voice '{voice}' is not supported by "
@@ -803,7 +820,17 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 f"Underlying TTS entity {snapshot.underlying_entity_id} "
                 "is not available"
             )
-        if not underlying.available:
+        try:
+            available = underlying.available
+            default_language = underlying.default_language
+            supported_languages = list(underlying.supported_languages)
+            default_options = dict(underlying.default_options or {})
+        except Exception as err:
+            raise HomeAssistantError(
+                f"Could not read TTS provider metadata from "
+                f"{snapshot.underlying_entity_id}: {err}"
+            ) from err
+        if not available:
             _LOGGER.error(
                 "Underlying TTS entity %s is unavailable",
                 snapshot.underlying_entity_id,
@@ -816,14 +843,14 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
         incoming_options.pop(CACHE_POLICY_OPTION, None)
         explicit_override = self._override_from_snapshot(snapshot)
         quiet_active = snapshot.quiet_mode_active
-        normal_language = language or underlying.default_language
+        normal_language = language or default_language
         effective_language = normal_language
 
         if explicit_override and explicit_override.language:
             effective_language = explicit_override.language
         elif quiet_active and snapshot.quiet_option == "voice":
             quiet_language = snapshot.quiet_language or normal_language
-            if quiet_language in underlying.supported_languages:
+            if quiet_language in supported_languages:
                 effective_language = quiet_language
             else:
                 _LOGGER.warning(
@@ -834,7 +861,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 )
                 quiet_active = False
 
-        if effective_language not in underlying.supported_languages:
+        if effective_language not in supported_languages:
             _LOGGER.error(
                 "Underlying TTS entity %s does not support language %s",
                 snapshot.underlying_entity_id,
@@ -845,7 +872,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 f"{snapshot.underlying_entity_id}"
             )
 
-        effective_options = dict(underlying.default_options or {})
+        effective_options = dict(default_options)
         effective_options.update(incoming_options)
         if quiet_active:
             option_name = snapshot.quiet_option
@@ -911,7 +938,7 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                 and explicit_override is None
             ):
                 effective_language = normal_language
-                if effective_language not in underlying.supported_languages:
+                if effective_language not in supported_languages:
                     _LOGGER.error(
                         "Underlying TTS entity %s does not support language %s",
                         snapshot.underlying_entity_id,
@@ -926,11 +953,18 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
             self._invalidate_quiet_cache_epoch(snapshot)
 
         if explicit_override is not None:
-            if "voice" not in (underlying.supported_options or []):
+            try:
+                supported_options = underlying.supported_options or []
+                voices = underlying.async_get_supported_voices(effective_language)
+            except Exception as err:
+                raise HomeAssistantError(
+                    f"Could not read TTS provider metadata from "
+                    f"{snapshot.underlying_entity_id}: {err}"
+                ) from err
+            if "voice" not in supported_options:
                 raise HomeAssistantError(
                     f"{snapshot.underlying_entity_id} does not support voice overrides"
                 )
-            voices = underlying.async_get_supported_voices(effective_language)
             if voices is not None and explicit_override.voice not in {
                 voice.voice_id for voice in voices
             }:

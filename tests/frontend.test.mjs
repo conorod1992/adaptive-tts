@@ -17,7 +17,18 @@ class FakeElement {
     this.type = "";
     this.step = "";
     this.className = "";
+    this._listeners = new Map();
     if (this.tagName === "SELECT") this.options = [];
+  }
+
+  addEventListener(type, callback) {
+    const callbacks = this._listeners.get(type) || [];
+    callbacks.push(callback);
+    this._listeners.set(type, callbacks);
+  }
+
+  emit(type) {
+    for (const callback of this._listeners.get(type) || []) callback({ type, target: this });
   }
 
   append(child) {
@@ -504,4 +515,91 @@ test("stale Clear override completion is suppressed after entity changes", async
 
   assert.equal(panel.shadowRoot.getElementById("override-success").textContent, "");
   assert.equal(panel.shadowRoot.getElementById("override-error").textContent, "");
+});
+
+
+test("selected TTS metadata refreshes when an unavailable provider recovers", async () => {
+  const panel = panelWith([
+    "engine", "language", "voice", "voice-label", "options", "message", "generate",
+    "error", "result", "audio", "override-engine", "override-language",
+    "override-voice", "set-override", "clear-override", "override-error",
+    "override-success",
+  ]);
+  panel.shadowRoot.getElementById("engine").value = "tts.source";
+  panel._loaded = true;
+  panel.isConnected = true;
+  panel._hass = {
+    states: { "tts.source": { state: "unavailable" } },
+    async callWS() { return { ...engineInfo("tts.source"), available: false }; },
+  };
+  panel._selectedAvailability = panel._selectedAvailabilitySnapshot(panel._hass);
+
+  panel.hass = {
+    states: { "tts.source": { state: "unknown" } },
+    async callWS(message) {
+      return engineInfo("tts.source", message.language || "en-US");
+    },
+  };
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(
+    panel.shadowRoot.getElementById("language").options.map((item) => item.value),
+    ["en-US"],
+  );
+  assert.equal(panel.shadowRoot.getElementById("generate").disabled, false);
+  assert.equal(panel.shadowRoot.getElementById("error").textContent, "");
+});
+
+test("preview response is discarded when request text changes in flight", async () => {
+  const panel = panelWith([
+    "engine", "language", "voice", "voice-label", "options", "message", "generate",
+    "error", "result", "audio", "used-engine", "used-underlying", "used-language",
+    "used-options", "used-quiet",
+  ]);
+  const generation = deferred();
+  panel._hass = {
+    states: { "tts.source": { state: "unknown" } },
+    callWS() { return generation.promise; },
+  };
+  panel.shadowRoot.getElementById("engine").value = "tts.source";
+  panel.shadowRoot.getElementById("language").value = "en-US";
+  panel.shadowRoot.getElementById("message").value = "Original";
+  panel._engineInfo = engineInfo("tts.source", "en-US");
+  panel._engineInfoLanguage = "en-US";
+
+  const pending = panel._generate();
+  panel.shadowRoot.getElementById("message").value = "Changed";
+  generation.resolve({
+    url: "/api/tts_proxy/old.mp3",
+    engine_id: "tts.source",
+    underlying_entity_id: "tts.source",
+    language: "en-US",
+    options: {},
+    quiet_mode_active: false,
+  });
+  await pending;
+
+  assert.equal(panel.shadowRoot.getElementById("result").style.display, "none");
+  assert.equal(panel.shadowRoot.getElementById("used-engine").textContent, "");
+});
+
+test("changing a provider option immediately clears an old preview result", () => {
+  const panel = panelWith([
+    "engine", "language", "voice", "options", "message", "result", "audio",
+    "used-engine", "used-underlying", "used-language", "used-options", "used-quiet",
+  ]);
+  panel._engineInfo = {
+    supported_options: ["speed"],
+    default_options: { speed: "normal" },
+  };
+  panel._renderOptionInputs();
+  panel.shadowRoot.getElementById("result").style.display = "block";
+  const before = panel._generationRequestId || 0;
+
+  const input = panel.shadowRoot.querySelectorAll("[data-option]")[0];
+  input.value = "fast";
+  input.emit("input");
+
+  assert.equal(panel.shadowRoot.getElementById("result").style.display, "none");
+  assert.equal(panel._generationRequestId, before + 1);
 });

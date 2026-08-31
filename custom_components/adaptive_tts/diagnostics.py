@@ -40,17 +40,35 @@ async def async_get_config_entry_diagnostics(
     pending = (
         adaptive_entity.next_voice_override if adaptive_entity is not None else None
     )
+    metadata_errors: dict[str, str] = {}
+    underlying_available = False
+    supported_languages: list[str] = []
+    supported_options: list[str] = []
+    if underlying is not None:
+        for key, reader, default in (
+            ("available", lambda: bool(underlying.available), False),
+            ("supported_languages", lambda: list(underlying.supported_languages), []),
+            ("supported_options", lambda: list(underlying.supported_options or []), []),
+        ):
+            try:
+                value = reader()
+            except Exception as err:
+                metadata_errors[key] = f"{type(err).__name__}: {err}"
+                value = default
+            if key == "available":
+                underlying_available = value
+            elif key == "supported_languages":
+                supported_languages = value
+            else:
+                supported_options = value
     return {
         "adaptive_tts_version": VERSION,
         "underlying_tts_entity_id": entity_id,
         "underlying_exists": underlying is not None,
-        "underlying_available": underlying.available if underlying else False,
-        "supported_languages": (
-            list(underlying.supported_languages) if underlying else []
-        ),
-        "supported_options": list(underlying.supported_options or [])
-        if underlying
-        else [],
+        "underlying_available": underlying_available,
+        "supported_languages": supported_languages,
+        "supported_options": supported_options,
+        "provider_metadata_errors": metadata_errors,
         "quiet_hours": {
             "enabled": config[CONF_QUIET_MODE],
             "start": str(config[CONF_QUIET_START]),

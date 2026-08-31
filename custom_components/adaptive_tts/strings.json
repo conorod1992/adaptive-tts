@@ -41,7 +41,8 @@
       "unsupported_option": "The selected option is not supported by this provider.",
       "unsupported_language": "The selected language is not supported by this provider.",
       "unsupported_voice": "The selected voice is not available for this provider and language.",
-      "override_required": "Enter a quiet voice/style value."
+      "override_required": "Enter a quiet voice/style value.",
+      "provider_details_unavailable": "The selected TTS provider details could not be read. Try again after the provider recovers."
     },
     "abort": {
       "provider_not_found": "The selected TTS entity is no longer available."
@@ -86,7 +87,8 @@
       "unsupported_option": "The selected option is not supported by this provider.",
       "unsupported_language": "The selected language is not supported by this provider.",
       "unsupported_voice": "The selected voice is not available for this provider and language.",
-      "override_required": "Enter a quiet voice/style value."
+      "override_required": "Enter a quiet voice/style value.",
+      "provider_details_unavailable": "The selected TTS provider details could not be read. Try again after the provider recovers."
     },
     "abort": {
       "provider_not_found": "The selected TTS entity is no longer available."

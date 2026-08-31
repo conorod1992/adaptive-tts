@@ -61,13 +61,41 @@ def _option_selector(options: list[str], default: str) -> selector.SelectSelecto
     )
 
 
-def _language_selector(provider) -> selector.SelectSelector:
-    """Build a selector for the underlying provider's supported languages."""
+class ProviderMetadataError(RuntimeError):
+    """Raised when a TTS provider cannot expose control-plane metadata."""
+
+
+def _provider_supported_options(provider) -> list[str]:
+    """Read provider options without leaking arbitrary provider exceptions."""
+    try:
+        return list(provider.supported_options or [])
+    except Exception as err:
+        raise ProviderMetadataError from err
+
+
+def _provider_supported_languages(provider) -> list[str]:
+    """Read provider languages without leaking arbitrary provider exceptions."""
+    try:
+        return list(provider.supported_languages)
+    except Exception as err:
+        raise ProviderMetadataError from err
+
+
+def _provider_default_language(provider) -> str:
+    """Read the provider default language with a bounded failure type."""
+    try:
+        return provider.default_language
+    except Exception as err:
+        raise ProviderMetadataError from err
+
+
+def _language_selector_from_values(languages: list[str]) -> selector.SelectSelector:
+    """Build a selector from already-read provider languages."""
     return selector.SelectSelector(
         selector.SelectSelectorConfig(
             options=[
                 selector.SelectOptionDict(value=language, label=language)
-                for language in provider.supported_languages
+                for language in languages
             ],
             mode=selector.SelectSelectorMode.DROPDOWN,
         )
@@ -76,7 +104,13 @@ def _language_selector(provider) -> selector.SelectSelector:
 
 def _enumerated_voices(provider, language: str | None):
     """Return provider voices, preserving None as 'cannot enumerate'."""
-    return provider.async_get_supported_voices(language or provider.default_language)
+    try:
+        effective_language = language or _provider_default_language(provider)
+        return provider.async_get_supported_voices(effective_language)
+    except ProviderMetadataError:
+        raise
+    except Exception as err:
+        raise ProviderMetadataError from err
 
 
 def _override_selector(
@@ -84,7 +118,10 @@ def _override_selector(
 ) -> selector.SelectSelector | selector.TextSelector:
     """Build a finite voice dropdown when available, else a text input."""
     if option == "voice":
-        voices = _enumerated_voices(provider, language)
+        try:
+            voices = _enumerated_voices(provider, language)
+        except ProviderMetadataError:
+            voices = None
         if voices is not None:
             return selector.SelectSelector(
                 selector.SelectSelectorConfig(
@@ -111,7 +148,10 @@ def _override_error(
         return "override_required"
     if option != "voice":
         return None
-    voices = _enumerated_voices(provider, language)
+    try:
+        voices = _enumerated_voices(provider, language)
+    except ProviderMetadataError:
+        return "provider_details_unavailable"
     if voices is not None and value not in {voice.voice_id for voice in voices}:
         return "unsupported_voice"
     return None
@@ -180,11 +220,20 @@ class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
         provider = get_tts_entity(self.hass, self._pending[CONF_UNDERLYING_TTS_ENTITY])
         if provider is None:
             return self.async_abort(reason="provider_not_found")
-        supported_options = list(provider.supported_options or [])
+        metadata_error = False
+        try:
+            supported_options = _provider_supported_options(provider)
+        except ProviderMetadataError:
+            supported_options = []
+            metadata_error = True
         default_option = preferred_quiet_option(supported_options)
-        errors: dict[str, str] = {}
+        errors: dict[str, str] = (
+            {"base": "provider_details_unavailable"} if metadata_error else {}
+        )
         if user_input is not None:
-            if user_input[CONF_QUIET_MODE] and (
+            if metadata_error and user_input[CONF_QUIET_MODE]:
+                errors["base"] = "provider_details_unavailable"
+            elif user_input[CONF_QUIET_MODE] and (
                 user_input[CONF_QUIET_OPTION] not in supported_options
             ):
                 errors[CONF_QUIET_OPTION] = "unsupported_option"
@@ -222,17 +271,32 @@ class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
         provider = get_tts_entity(self.hass, self._pending[CONF_UNDERLYING_TTS_ENTITY])
         if provider is None:
             return self.async_abort(reason="provider_not_found")
+        try:
+            supported_languages = _provider_supported_languages(provider)
+            default_language = _provider_default_language(provider)
+        except ProviderMetadataError:
+            return self.async_show_form(
+                step_id="language",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required(
+                            CONF_QUIET_LANGUAGE
+                        ): _language_selector_from_values([])
+                    }
+                ),
+                errors={"base": "provider_details_unavailable"},
+            )
         if user_input is not None:
             language = user_input[CONF_QUIET_LANGUAGE]
-            if language not in provider.supported_languages:
+            if language not in supported_languages:
                 return self.async_show_form(
                     step_id="language",
                     data_schema=vol.Schema(
                         {
                             vol.Required(
                                 CONF_QUIET_LANGUAGE,
-                                default=provider.default_language,
-                            ): _language_selector(provider)
+                                default=default_language,
+                            ): _language_selector_from_values(supported_languages)
                         }
                     ),
                     errors={CONF_QUIET_LANGUAGE: "unsupported_language"},
@@ -244,8 +308,8 @@ class AdaptiveTTSConfigFlow(ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(
                     CONF_QUIET_LANGUAGE,
-                    default=provider.default_language,
-                ): _language_selector(provider)
+                    default=default_language,
+                ): _language_selector_from_values(supported_languages)
             }
         )
         return self.async_show_form(step_id="language", data_schema=schema)
@@ -332,7 +396,12 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
         provider = get_tts_entity(self.hass, self._pending[CONF_UNDERLYING_TTS_ENTITY])
         if provider is None:
             return self.async_abort(reason="provider_not_found")
-        supported_options = list(provider.supported_options or [])
+        metadata_error = False
+        try:
+            supported_options = _provider_supported_options(provider)
+        except ProviderMetadataError:
+            supported_options = []
+            metadata_error = True
         current_option = self._config.get(
             CONF_QUIET_OPTION, preferred_quiet_option(supported_options)
         )
@@ -341,9 +410,13 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
             if current_option in supported_options
             else preferred_quiet_option(supported_options)
         )
-        errors: dict[str, str] = {}
+        errors: dict[str, str] = (
+            {"base": "provider_details_unavailable"} if metadata_error else {}
+        )
         if user_input is not None:
-            if user_input[CONF_QUIET_MODE] and (
+            if metadata_error and user_input[CONF_QUIET_MODE]:
+                errors["base"] = "provider_details_unavailable"
+            elif user_input[CONF_QUIET_MODE] and (
                 user_input[CONF_QUIET_OPTION] not in supported_options
             ):
                 errors[CONF_QUIET_OPTION] = "unsupported_option"
@@ -386,19 +459,32 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
         provider = get_tts_entity(self.hass, self._pending[CONF_UNDERLYING_TTS_ENTITY])
         if provider is None:
             return self.async_abort(reason="provider_not_found")
-        current_language = self._config.get(
-            CONF_QUIET_LANGUAGE, provider.default_language
-        )
+        try:
+            supported_languages = _provider_supported_languages(provider)
+            default_language = _provider_default_language(provider)
+        except ProviderMetadataError:
+            return self.async_show_form(
+                step_id="language",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required(
+                            CONF_QUIET_LANGUAGE
+                        ): _language_selector_from_values([])
+                    }
+                ),
+                errors={"base": "provider_details_unavailable"},
+            )
+        current_language = self._config.get(CONF_QUIET_LANGUAGE, default_language)
         provider_changed = (
             self._pending[CONF_UNDERLYING_TTS_ENTITY]
             != self._config[CONF_UNDERLYING_TTS_ENTITY]
         )
-        if provider_changed or current_language not in provider.supported_languages:
-            current_language = provider.default_language
+        if provider_changed or current_language not in supported_languages:
+            current_language = default_language
 
         if user_input is not None:
             language = user_input[CONF_QUIET_LANGUAGE]
-            if language not in provider.supported_languages:
+            if language not in supported_languages:
                 return self.async_show_form(
                     step_id="language",
                     data_schema=vol.Schema(
@@ -406,7 +492,7 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
                             vol.Required(
                                 CONF_QUIET_LANGUAGE,
                                 default=current_language,
-                            ): _language_selector(provider)
+                            ): _language_selector_from_values(supported_languages)
                         }
                     ),
                     errors={CONF_QUIET_LANGUAGE: "unsupported_language"},
@@ -419,7 +505,7 @@ class AdaptiveTTSOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_QUIET_LANGUAGE,
                     default=current_language,
-                ): _language_selector(provider)
+                ): _language_selector_from_values(supported_languages)
             }
         )
         return self.async_show_form(step_id="language", data_schema=schema)
