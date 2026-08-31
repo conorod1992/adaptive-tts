@@ -220,7 +220,7 @@ delegation and is never sent to the underlying provider.
 
 ## Architecture and Home Assistant APIs
 
-This version targets the current Home Assistant Core `dev` TTS entity API:
+This version targets the Home Assistant 2026.8+ TTS entity API:
 
 - `tts.get_engine_instance`/the TTS helper resolves the configured entity;
 - `TextToSpeechEntity` metadata is mirrored dynamically;

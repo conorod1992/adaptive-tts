@@ -53,7 +53,7 @@ async def async_get_config_entry_diagnostics(
             try:
                 value = reader()
             except Exception as err:
-                metadata_errors[key] = f"{type(err).__name__}: {err}"
+                metadata_errors[key] = type(err).__name__
                 value = default
             if key == "available":
                 underlying_available = value
