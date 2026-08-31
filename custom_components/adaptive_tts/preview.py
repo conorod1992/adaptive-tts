@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator, Mapping
 from typing import Any
@@ -31,18 +32,49 @@ def _json_value(value: Any) -> Any:
 
 
 def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> dict:
-    """Serialize metadata for one TTS entity."""
+    """Serialize metadata for one TTS entity without hiding a broken provider."""
     engine = get_engine_instance(hass, engine_id)
     if engine is None:
         raise HomeAssistantError(f"TTS entity {engine_id} was not found")
 
-    available = bool(getattr(engine, "available", True))
-    effective_language = language or engine.default_language
+    metadata_errors: dict[str, str] = {}
+
+    def read_metadata(key: str, reader, default):
+        try:
+            return reader()
+        except Exception as err:
+            metadata_errors[key] = type(err).__name__
+            _LOGGER.warning(
+                "Could not read %s metadata for TTS provider %s: %s",
+                key,
+                engine_id,
+                err,
+            )
+            return default
+
+    available = read_metadata(
+        "available", lambda: bool(getattr(engine, "available", True)), False
+    )
+    default_language = read_metadata(
+        "default_language", lambda: engine.default_language, ""
+    )
+    supported_languages = read_metadata(
+        "supported_languages", lambda: list(engine.supported_languages), []
+    )
+    supported_options = read_metadata(
+        "supported_options", lambda: list(engine.supported_options or []), []
+    )
+    default_options = read_metadata(
+        "default_options", lambda: dict(engine.default_options or {}), {}
+    )
+
+    effective_language = language or default_language
     voices = None
     if available and effective_language:
         try:
             voices = engine.async_get_supported_voices(effective_language)
         except Exception as err:
+            metadata_errors["voices"] = type(err).__name__
             _LOGGER.warning(
                 "Could not enumerate voices for TTS provider %s (%s): %s",
                 engine_id,
@@ -59,13 +91,13 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
             if isinstance(engine, AdaptiveTTSEntity)
             else engine_id
         ),
-        "default_language": engine.default_language,
-        "supported_languages": list(engine.supported_languages),
-        "supported_options": list(engine.supported_options or []),
+        "default_language": default_language,
+        "supported_languages": supported_languages,
+        "supported_options": supported_options,
         "default_options": _json_value(
             {
                 key: value
-                for key, value in dict(engine.default_options or {}).items()
+                for key, value in default_options.items()
                 if key != CACHE_POLICY_OPTION
             }
         ),
@@ -74,6 +106,7 @@ def _engine_info(hass: HomeAssistant, engine_id: str, language: str | None) -> d
         ],
         "voices_enumerated": voices is not None,
         "available": available,
+        "metadata_errors": metadata_errors,
     }
 
 
@@ -220,6 +253,9 @@ async def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
                 has_audio = True
         if not has_audio:
             raise HomeAssistantError("The provider returned no preview audio")
+    except asyncio.CancelledError:
+        stream.delete()
+        raise
     except HomeAssistantError:
         stream.delete()
         raise

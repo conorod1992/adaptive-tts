@@ -796,6 +796,14 @@ class AdaptiveTTSEntity(TextToSpeechEntity):
                         "from storage: %s",
                         err,
                     )
+                    try:
+                        await self._override_store.async_save({})
+                    except Exception as save_err:
+                        _LOGGER.error(
+                            "Failed to neutralize invalid persistent voice "
+                            "override storage: %s",
+                            save_err,
+                        )
             self._persistent_voice_override = None
         _LOGGER.warning(
             "Cleared persistent voice override %s for %s after TTS generation failed",
