@@ -4,7 +4,7 @@ from typing import Final
 
 DOMAIN: Final = "adaptive_tts"
 NAME: Final = "Adaptive TTS"
-VERSION: Final = "0.2.16"
+VERSION: Final = "1.0.0"
 
 CONF_UNDERLYING_TTS_ENTITY: Final = "underlying_tts_entity"
 CONF_QUIET_MODE: Final = "quiet_mode"
