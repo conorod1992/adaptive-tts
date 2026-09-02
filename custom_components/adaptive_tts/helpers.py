@@ -12,16 +12,33 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    CONF_QUIET_END,
     CONF_QUIET_LANGUAGE,
     CONF_QUIET_MODE,
     CONF_QUIET_OPTION,
+    CONF_QUIET_START,
+    CONF_QUIET_VALUE,
+    DEFAULT_QUIET_END,
+    DEFAULT_QUIET_OPTION,
+    DEFAULT_QUIET_START,
     DOMAIN,
 )
 
 
 def entry_config(entry: ConfigEntry) -> dict[str, Any]:
-    """Return canonical config entry data with options applied."""
+    """Return canonical config entry data with options applied.
+
+    Quiet-hours keys are retained only as a compatibility shim for config entries
+    created before version 2. New and migrated entries do not expose these values,
+    so defaults keep the legacy runtime path safely disabled while old in-flight
+    policy snapshots can still be decoded.
+    """
     config = {**entry.data, **entry.options}
+    config.setdefault(CONF_QUIET_MODE, False)
+    config.setdefault(CONF_QUIET_START, DEFAULT_QUIET_START)
+    config.setdefault(CONF_QUIET_END, DEFAULT_QUIET_END)
+    config.setdefault(CONF_QUIET_OPTION, DEFAULT_QUIET_OPTION)
+    config.setdefault(CONF_QUIET_VALUE, "")
     if not config.get(CONF_QUIET_MODE) or config.get(CONF_QUIET_OPTION) != "voice":
         config.pop(CONF_QUIET_LANGUAGE, None)
     return config
@@ -72,7 +89,7 @@ def selectable_tts_entities(hass: HomeAssistant) -> list[str]:
 
 
 def preferred_quiet_option(supported_options: list[str] | None) -> str:
-    """Choose the most useful provider option for a quiet override."""
+    """Choose the most useful provider option for a legacy quiet override."""
     options = supported_options or []
     for candidate in ("voice", "style", "emotion"):
         if candidate in options:
