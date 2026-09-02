@@ -132,7 +132,6 @@ class AdaptiveTtsPanel extends HTMLElement {
               <dt>Underlying entity</dt><dd><code id="used-underlying"></code></dd>
               <dt>Language</dt><dd><code id="used-language"></code></dd>
               <dt>Options</dt><dd><code id="used-options"></code></dd>
-              <dt>Quiet mode active</dt><dd id="used-quiet"></dd>
             </dl>
           </section>
         </ha-card>
@@ -719,7 +718,6 @@ class AdaptiveTtsPanel extends HTMLElement {
       this.shadowRoot.getElementById("used-underlying").textContent = result.underlying_entity_id;
       this.shadowRoot.getElementById("used-language").textContent = result.language;
       this.shadowRoot.getElementById("used-options").textContent = JSON.stringify(result.options);
-      this.shadowRoot.getElementById("used-quiet").textContent = result.quiet_mode_active ? "Yes" : "No";
       this.shadowRoot.getElementById("result").style.display = "block";
     } catch (err) {
       if (this._generationIsCurrent(requestId, fingerprint)) {
@@ -742,7 +740,7 @@ class AdaptiveTtsPanel extends HTMLElement {
     const audio = this.shadowRoot.getElementById("audio");
     audio.pause();
     audio.removeAttribute("src");
-    for (const id of ["used-engine", "used-underlying", "used-language", "used-options", "used-quiet"]) {
+    for (const id of ["used-engine", "used-underlying", "used-language", "used-options"]) {
       this.shadowRoot.getElementById(id).textContent = "";
     }
   }
