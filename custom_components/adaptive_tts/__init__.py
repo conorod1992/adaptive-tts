@@ -15,6 +15,12 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
+    CONF_QUIET_END,
+    CONF_QUIET_LANGUAGE,
+    CONF_QUIET_MODE,
+    CONF_QUIET_OPTION,
+    CONF_QUIET_START,
+    CONF_QUIET_VALUE,
     CONF_UNDERLYING_TTS_ENTITY,
     DATA_ENTITIES,
     DATA_FRONTEND_REGISTERED,
@@ -31,6 +37,15 @@ from .tts import async_remove_voice_override_storage
 
 PLATFORMS = [Platform.TTS]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+_LEGACY_QUIET_KEYS = (
+    CONF_QUIET_MODE,
+    CONF_QUIET_START,
+    CONF_QUIET_END,
+    CONF_QUIET_OPTION,
+    CONF_QUIET_LANGUAGE,
+    CONF_QUIET_VALUE,
+)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -67,6 +82,26 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         async_register_services(hass)
         domain_data[DATA_SERVICES_REGISTERED] = True
 
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Remove quiet-hours settings from config entries created before version 2."""
+    if entry.version >= 2:
+        return True
+
+    data = dict(entry.data)
+    options = dict(entry.options)
+    for key in _LEGACY_QUIET_KEYS:
+        data.pop(key, None)
+        options.pop(key, None)
+
+    hass.config_entries.async_update_entry(
+        entry,
+        data=data,
+        options=options,
+        version=2,
+    )
     return True
 
 

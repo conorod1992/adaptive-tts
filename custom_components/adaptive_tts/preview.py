@@ -234,12 +234,10 @@ async def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
             underlying_entity_id = resolved.underlying_entity_id
             effective_language = resolved.language
             effective_options = resolved.options
-            quiet_active = resolved.quiet_mode_active
         else:
             underlying_entity_id = msg["engine_id"]
             effective_language = stream.language
             effective_options = stream.options
-            quiet_active = False
 
         async def message_gen() -> AsyncGenerator[str]:
             yield msg["message"]
@@ -270,7 +268,6 @@ async def create_preview(hass: HomeAssistant, msg: dict[str, Any]) -> dict[str, 
         "underlying_entity_id": underlying_entity_id,
         "language": effective_language,
         "options": _json_value(effective_options),
-        "quiet_mode_active": quiet_active,
         "storage": "Home Assistant temporary in-memory TTS cache",
     }
 

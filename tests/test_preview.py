@@ -81,7 +81,6 @@ async def test_preview_uses_replayable_memory_only_native_stream(hass) -> None:
         )
     assert result["url"] == "/api/tts_proxy/temporary.mp3"
     assert result["underlying_entity_id"] == "tts.source"
-    assert result["quiet_mode_active"] is False
     assert "in-memory" in result["storage"]
     assert stream.permanent_writes == 0
     assert stream.message_stream is not None
@@ -119,7 +118,7 @@ async def test_preview_has_no_integration_owned_audio_store(hass) -> None:
 async def test_generate_websocket_handler_returns_preview_metadata(hass) -> None:
     """The WebSocket command sends preview metadata to its caller."""
     connection = FakeConnection()
-    expected = {"url": "/api/tts_proxy/test.mp3", "quiet_mode_active": True}
+    expected = {"url": "/api/tts_proxy/test.mp3"}
     with patch(
         "custom_components.adaptive_tts.preview.create_preview",
         new=AsyncMock(return_value=expected),

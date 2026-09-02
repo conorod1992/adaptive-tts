@@ -4,23 +4,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant import config_entries, data_entry_flow
-from homeassistant.components.tts import Voice
 from homeassistant.const import CONF_NAME
-from homeassistant.helpers import selector
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.adaptive_tts.config_flow import (
-    _existing_override_default,
-    _override_error,
-    _override_selector,
-)
 from custom_components.adaptive_tts.const import (
-    CONF_QUIET_END,
-    CONF_QUIET_LANGUAGE,
-    CONF_QUIET_MODE,
-    CONF_QUIET_OPTION,
-    CONF_QUIET_START,
-    CONF_QUIET_VALUE,
     CONF_UNDERLYING_TTS_ENTITY,
     DOMAIN,
 )
@@ -28,86 +15,11 @@ from custom_components.adaptive_tts.const import (
 from .test_tts import MockTTS
 
 
-def test_voice_override_uses_selected_language() -> None:
-    """Enumerable voices come from the explicitly selected quiet language."""
-    source = MockTTS()
-    source.async_get_supported_voices = lambda language: (
-        [Voice("british", "British Whisper")]
-        if language == "en-GB"
-        else [Voice("american", "American Whisper")]
-    )
-    voice_selector = _override_selector(source, "voice", "en-GB")
-    assert isinstance(voice_selector, selector.SelectSelector)
-    assert voice_selector.config["options"] == [
-        {"value": "british", "label": "British Whisper"}
-    ]
-    assert voice_selector.config["custom_value"] is False
-
-
-def test_override_falls_back_to_text_without_enumerated_voices() -> None:
-    """Non-enumerable voices and non-voice options remain free text."""
-    source = MockTTS()
-    source.async_get_supported_voices = lambda language: None
-    assert isinstance(
-        _override_selector(source, "voice", "en-GB"), selector.TextSelector
-    )
-    assert _override_error(source, "voice", "en-GB", "provider-specific") is None
-    assert isinstance(_override_selector(MockTTS(), "style"), selector.TextSelector)
-
-
-def test_empty_voice_list_is_an_empty_finite_selector() -> None:
-    """An explicit empty list never becomes an arbitrary free-text voice field."""
-    source = MockTTS()
-    source.async_get_supported_voices = lambda language: []
-    voice_selector = _override_selector(source, "voice", "en-GB")
-    assert isinstance(voice_selector, selector.SelectSelector)
-    assert voice_selector.config["options"] == []
-    assert voice_selector.config["custom_value"] is False
-    assert _override_error(source, "voice", "en-GB", "made-up") == "unsupported_voice"
-
-
-def test_changed_override_option_does_not_reuse_old_value() -> None:
-    """A voice ID cannot silently become the default for a different option."""
-    source = MockTTS()
-    assert (
-        _existing_override_default(
-            source,
-            "style",
-            None,
-            "whisper",
-            provider_changed=False,
-            option_changed=True,
-        )
-        == ""
-    )
-
-
-def test_unchanged_override_option_keeps_valid_value() -> None:
-    """An unchanged policy still preserves a valid existing override."""
-    source = MockTTS()
-    assert (
-        _existing_override_default(
-            source,
-            "voice",
-            "en-US",
-            "whisper",
-            provider_changed=False,
-            option_changed=False,
-        )
-        == "whisper"
-    )
-
-
 @pytest.mark.asyncio
-async def test_config_flow_succeeds(hass) -> None:
-    """The UI flow selects quiet language before quiet voice."""
+async def test_config_flow_succeeds_without_quiet_hours_step(hass) -> None:
+    """The UI creates a wrapper after selecting only its name and provider."""
     source = MockTTS()
     source.hass = hass
-    source.async_get_supported_voices = lambda language: (
-        [Voice("british", "British Whisper")]
-        if language == "en-GB"
-        else [Voice("normal", "Normal")]
-    )
     hass.states.async_set("tts.source", "unknown")
     with (
         patch(
@@ -134,41 +46,23 @@ async def test_config_flow_succeeds(hass) -> None:
             result["flow_id"],
             {CONF_NAME: "Bedroom TTS", CONF_UNDERLYING_TTS_ENTITY: "tts.source"},
         )
-        assert result["step_id"] == "policy"
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            {
-                CONF_QUIET_MODE: True,
-                CONF_QUIET_START: "23:00:00",
-                CONF_QUIET_END: "07:00:00",
-                CONF_QUIET_OPTION: "voice",
-            },
-        )
-        assert result["step_id"] == "language"
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONF_QUIET_LANGUAGE: "en-GB"}
-        )
-        assert result["step_id"] == "override"
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONF_QUIET_VALUE: "british"}
-        )
+
     assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
     assert result["title"] == "Bedroom TTS"
-    assert result["data"][CONF_QUIET_LANGUAGE] == "en-GB"
-    assert result["data"][CONF_QUIET_VALUE] == "british"
+    assert result["data"] == {
+        CONF_NAME: "Bedroom TTS",
+        CONF_UNDERLYING_TTS_ENTITY: "tts.source",
+    }
 
 
 @pytest.mark.asyncio
-async def test_config_flow_rejects_voice_not_in_enumerated_list(hass) -> None:
-    """A provider-supplied finite voice list is authoritative."""
-    source = MockTTS()
-    source.hass = hass
-    source.async_get_supported_voices = lambda language: [Voice("valid", "Valid")]
+async def test_config_flow_rejects_missing_provider(hass) -> None:
+    """The setup flow does not create a wrapper for a missing TTS entity."""
     hass.states.async_set("tts.source", "unknown")
     with (
         patch(
             "custom_components.adaptive_tts.config_flow.get_tts_entity",
-            return_value=source,
+            return_value=None,
         ),
         patch(
             "custom_components.adaptive_tts.config_flow.is_adaptive_entity",
@@ -188,24 +82,15 @@ async def test_config_flow_rejects_voice_not_in_enumerated_list(hass) -> None:
         )
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_NAME: "Bedroom TTS", CONF_UNDERLYING_TTS_ENTITY: "tts.source"},
-        )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
             {
-                CONF_QUIET_MODE: True,
-                CONF_QUIET_START: "23:00:00",
-                CONF_QUIET_END: "07:00:00",
-                CONF_QUIET_OPTION: "voice",
+                CONF_NAME: "Bedroom TTS",
+                CONF_UNDERLYING_TTS_ENTITY: "tts.source",
             },
         )
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONF_QUIET_LANGUAGE: "en-US"}
-        )
-        with pytest.raises(data_entry_flow.InvalidData):
-            await hass.config_entries.flow.async_configure(
-                result["flow_id"], {CONF_QUIET_VALUE: "stale"}
-            )
+
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_UNDERLYING_TTS_ENTITY: "provider_not_found"}
 
 
 @pytest.mark.asyncio
@@ -237,20 +122,14 @@ async def test_recursive_provider_is_rejected(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_options_flow_updates_provider_and_policy(hass) -> None:
-    """Options flow updates the provider and quiet settings."""
+async def test_options_flow_updates_only_provider(hass) -> None:
+    """Configure changes the wrapped TTS provider without policy settings."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Bedroom TTS",
         data={
             CONF_NAME: "Bedroom TTS",
             CONF_UNDERLYING_TTS_ENTITY: "tts.old",
-            CONF_QUIET_MODE: True,
-            CONF_QUIET_START: "23:00:00",
-            CONF_QUIET_END: "07:00:00",
-            CONF_QUIET_OPTION: "voice",
-            CONF_QUIET_LANGUAGE: "en-GB",
-            CONF_QUIET_VALUE: "whisper",
         },
     )
     entry.add_to_hass(hass)
@@ -279,16 +158,6 @@ async def test_options_flow_updates_provider_and_policy(hass) -> None:
         result = await hass.config_entries.options.async_configure(
             result["flow_id"], {CONF_UNDERLYING_TTS_ENTITY: "tts.new"}
         )
-        result = await hass.config_entries.options.async_configure(
-            result["flow_id"],
-            {
-                CONF_QUIET_MODE: False,
-                CONF_QUIET_START: "22:00:00",
-                CONF_QUIET_END: "06:00:00",
-                CONF_QUIET_OPTION: "voice",
-            },
-        )
+
     assert result["type"] is data_entry_flow.FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_UNDERLYING_TTS_ENTITY] == "tts.new"
-    assert result["data"][CONF_QUIET_MODE] is False
-    assert CONF_QUIET_LANGUAGE not in result["data"]
+    assert result["data"] == {CONF_UNDERLYING_TTS_ENTITY: "tts.new"}

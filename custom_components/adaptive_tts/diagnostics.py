@@ -8,12 +8,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONF_QUIET_END,
-    CONF_QUIET_LANGUAGE,
-    CONF_QUIET_MODE,
-    CONF_QUIET_OPTION,
-    CONF_QUIET_START,
-    CONF_QUIET_VALUE,
     CONF_UNDERLYING_TTS_ENTITY,
     DATA_ENTITIES,
     DOMAIN,
@@ -69,14 +63,6 @@ async def async_get_config_entry_diagnostics(
         "supported_languages": supported_languages,
         "supported_options": supported_options,
         "provider_metadata_errors": metadata_errors,
-        "quiet_hours": {
-            "enabled": config[CONF_QUIET_MODE],
-            "start": str(config[CONF_QUIET_START]),
-            "end": str(config[CONF_QUIET_END]),
-            "override_option": config[CONF_QUIET_OPTION],
-            "override_language": config.get(CONF_QUIET_LANGUAGE),
-            "override_value": config[CONF_QUIET_VALUE],
-        },
         "voice_override": {
             "persistent_language": persistent.language if persistent else None,
             "persistent_voice": persistent.voice if persistent else None,
