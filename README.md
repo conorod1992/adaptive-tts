@@ -1,14 +1,9 @@
 # Adaptive TTS
 
 Adaptive TTS is a Home Assistant custom integration that creates a TTS entity
-which wraps another TTS entity. It captures the applicable provider options and
-Adaptive TTS policy when Home Assistant prepares each TTS request, then uses
-that same snapshot during synthesis.
-
-It is useful when the same Assist pipeline or automation should keep using one
-TTS entity while its presentation changes by policy. A typical setup uses the
-normal Home Assistant Cloud voice during the day and a supported whisper voice
-variant overnight.
+which wraps another TTS entity. It lets Home Assistant keep using one TTS entity
+while a voice can be changed temporarily or persistently without rewriting an
+Assist pipeline.
 
 ```text
 Assist / automation
@@ -24,21 +19,19 @@ audio returned to Home Assistant
 ```
 
 Adaptive TTS does not rewrite or shorten text, alter Assist conversation
-responses, control media-player or satellite volume, or use an LLM. It only
-changes supported TTS presentation options during audio synthesis.
+responses, control media-player or satellite volume, schedule presentation
+changes, or use an LLM. It only changes supported TTS presentation options when
+explicitly requested.
 
 ## Features
 
-- Config-entry setup and options managed entirely in the Home Assistant UI.
+- Config-entry setup and provider selection managed entirely in the Home
+  Assistant UI.
 - Wraps an existing `tts.*` entity and exposes its languages, defaults,
   supported option names, and supported voices.
-- Quiet hours support ordinary and cross-midnight ranges such as
-  `23:00–07:00`.
-- Quiet voice configuration lets you choose the language/accent first and then
-  a voice exposed for that language.
 - Home Assistant actions can override the voice for the next TTS request or
   persistently until changed or cleared.
-- Preserves incoming options and replaces only the configured/explicit options.
+- Preserves incoming options and replaces only explicitly overridden options.
 - Rejects Adaptive TTS entities as providers, preventing direct and indirect
   wrapper loops.
 - Forwards streaming input when the underlying entity supports it; otherwise
@@ -63,39 +56,20 @@ matching directory under your Home Assistant configuration and restart.
 2. Search for **Adaptive TTS**.
 3. Enter a name and select the source TTS entity, for example
    `tts.home_assistant_cloud`.
-4. Enable or disable quiet mode and choose the start and end times.
-5. Select the provider option to override.
-6. For a voice override, choose the language/accent family first and then choose
-   a voice exposed by the provider for that language.
 
-Home Assistant Cloud exposes voice variants as voice IDs. Available voices and
-styles depend entirely on the selected provider and language.
+To change the wrapped provider later, open the Adaptive TTS integration entry
+and choose **Configure**.
 
-To change the provider or quiet-hours policy later, open the Adaptive TTS
-integration entry and choose **Configure**.
-
-If the start and end times are identical, quiet mode is active all day. The
-start is inclusive and the end is exclusive. Home Assistant normally prepares a
-TTS result stream shortly before synthesis; Adaptive TTS freezes the policy at
-that preparation point so an already prepared request cannot change voice,
-provider, or cache identity halfway through. A request prepared immediately
-before a quiet-hours boundary therefore keeps the policy it was prepared with.
-
-When the override is `voice`, the configuration UI enumerates the provider's
-supported languages first, then loads voices for the selected language. If a
-provider does not enumerate voices, Adaptive TTS retains a text-field fallback.
-If a provider explicitly reports an empty finite voice list, there is no valid
-voice to select for that language. Non-voice options such as `style` or
-`emotion` use a text field because Home Assistant does not provide a generic
-API for enumerating arbitrary option values.
+Adaptive TTS deliberately does not decide *when* a quieter or different voice
+should be used. Scheduling, room state, household mode, or other broader
+assistant/satellite policy can live elsewhere in Home Assistant and call the
+voice override actions when required.
 
 ## Using Adaptive TTS in Assist
 
 After setup, edit an Assist pipeline and select the new entity, usually named
 something like `tts.adaptive_tts` or `tts.bedroom_tts`, as its TTS engine.
-Choose the language and normal voice as usual. Adaptive TTS preserves those
-normal pipeline options outside quiet hours and applies the configured quiet
-override during quiet hours. It does not modify the pipeline itself.
+Choose the pipeline language and normal voice as usual.
 
 Automations can use the Adaptive TTS entity anywhere they would use a normal
 TTS entity. The integration generates and returns audio; it never calls
@@ -110,23 +84,17 @@ Adaptive TTS exposes two Home Assistant actions.
 Targets one or more Adaptive TTS entities and accepts:
 
 - **Language** — the language/accent code, such as `en-GB`. This is explicit
-  because provider voices are language-specific and prevents accidentally
-  pairing a voice with the quiet-hours or pipeline language from another
-  accent family. The Home Assistant action editor uses its native language
-  selector for this field.
+  because provider voices are language-specific. The Home Assistant action
+  editor uses its native language selector for this field.
 - **Voice** — the provider voice ID exposed for that language.
 - **Duration**:
   - **Next TTS request** — use the override once, then automatically return to
-    the normal/quiet-hours policy.
+    the normal provider/pipeline voice.
   - **Until changed again** — keep using the override until another persistent
     override replaces it or it is cleared.
 
 A next-request override is intentionally in-memory only. A persistent override
 is saved in Home Assistant storage and survives restarts.
-
-An explicit voice override takes precedence over a quiet-hours **voice**
-override. If quiet mode changes another option such as style or emotion, that
-option may still be applied alongside the explicit voice.
 
 Adaptive TTS does **not** rewrite the Assist pipeline when setting a persistent
 override. Any pipeline or automation using the targeted Adaptive TTS entity
@@ -140,8 +108,8 @@ Clears:
 - only a pending next-request override; or
 - only the persistent override.
 
-Clearing the persistent override returns the entity to its ordinary pipeline
-and quiet-hours behavior.
+Clearing the persistent override returns the entity to the ordinary provider and
+pipeline settings.
 
 For manual use, the Adaptive TTS panel provides the same set/clear behavior
 without requiring voice IDs to be typed. It loads the wrapped provider's
@@ -179,8 +147,8 @@ The TTS Test section lets an administrator:
 - inspect supported languages, voices, and provider option names;
 - override test options without changing the Assist pipeline;
 - generate and replay audio; and
-- see the requested entity, actual underlying entity, effective language and
-  options, and whether quiet mode was active.
+- see the requested entity, actual underlying entity, effective language, and
+  effective options.
 
 Preview generation uses Home Assistant's authenticated WebSocket API to create
 a native TTS result stream. The spoken text is passed as a message stream,
@@ -195,15 +163,11 @@ The underlying provider still performs synthesis. Its account, subscription,
 network access, rate limits, and API costs all continue to apply. Adaptive TTS
 does not provide voices of its own.
 
-At runtime, a configured quiet option is checked against the provider's current
-`supported_options`. A quiet-hours `voice` is also checked against
-`async_get_supported_voices` when the provider supplies a list. If an optional
-quiet-hours capability, language, or voice disappears, Adaptive TTS logs the
-problem and falls back to the normal provider settings for that request instead
-of breaking otherwise-valid speech. Explicit voice overrides remain strict: an
-invalid explicit override fails clearly and is cleared so it cannot poison later
-requests. Providers that do not enumerate valid values for a non-voice option
-can only be validated by the provider itself.
+Explicit voice overrides are validated against the provider's current
+`supported_options`, supported languages, and `async_get_supported_voices` data
+when the provider supplies a finite voice list. An invalid explicit override
+fails clearly and is cleared so it cannot poison later requests. Providers that
+do not enumerate voices can still accept provider-specific voice IDs.
 
 Underlying provider output is also validated before Adaptive TTS returns it to
 Home Assistant. Missing audio, malformed one-shot results, malformed streaming
@@ -211,12 +175,12 @@ responses, non-byte stream chunks, and provider exceptions are treated as TTS
 failures and follow the same explicit-override recovery path.
 
 Home Assistant forms its normal non-streaming cache identity before invoking a
-TTS entity. Adaptive TTS contributes a private, self-contained policy snapshot
-through its public default-options metadata so normal, quiet, one-shot voice
-override, and persistent voice override results use the correct cache identity.
-A unique request nonce prevents separately prepared streams from sharing a
-pending one-shot override cache entry. The private snapshot is removed before
-delegation and is never sent to the underlying provider.
+TTS entity. Adaptive TTS contributes a private, self-contained request snapshot
+through its public default-options metadata so normal, one-shot voice override,
+and persistent voice override results use the correct cache identity. A unique
+request nonce prevents separately prepared streams from sharing a pending
+one-shot override cache entry. The private snapshot is removed before delegation
+and is never sent to the underlying provider.
 
 ## Architecture and Home Assistant APIs
 
@@ -253,28 +217,26 @@ For a Home Assistant Cloud manual test:
 
 1. Confirm `tts.home_assistant_cloud` works directly.
 2. Open Adaptive TTS's TTS Test panel and select an English language.
-3. Generate the same sentence directly with a normal voice and a listed voice
-   variant.
-4. Configure that variant as the Adaptive TTS quiet voice override.
-5. Generate through the wrapper inside and outside the configured time range;
-   confirm the reported underlying entity, effective options, and quiet state.
-6. Use the panel or call `adaptive_tts.set_voice_override` with **Next TTS
+3. Generate the same sentence directly with two different listed voices.
+4. Generate through the Adaptive TTS wrapper and confirm the reported
+   underlying entity, effective language, and options.
+5. Use the panel or call `adaptive_tts.set_voice_override` with **Next TTS
    request**, then run an Assist request twice and confirm only the first uses
    that voice.
-7. Use **Until changed again**, restart Home Assistant, and confirm the override
+6. Use **Until changed again**, restart Home Assistant, and confirm the override
    remains active.
-8. Clear the override from the panel or call
+7. Clear the override from the panel or call
    `adaptive_tts.clear_voice_override` and confirm ordinary behavior resumes.
-9. Disable or remove the source provider and confirm the wrapper reports a
+8. Disable or remove the source provider and confirm the wrapper reports a
    clear unavailable-provider error.
 
 ## Scope
 
-Adaptive TTS deliberately keeps policy explicit. It does not include emotion
-inference, sentiment analysis, text rewriting, notification handling, volume
-control, per-room rules, or a generic automation policy builder. Provider voice
-and style choices can be driven explicitly from Home Assistant automations
-without adding an LLM decision layer.
+Adaptive TTS deliberately keeps TTS behavior explicit. It does not include
+emotion inference, sentiment analysis, text rewriting, notification handling,
+volume control, per-room rules, scheduling, satellite feedback policy, or a
+generic automation policy builder. Those broader decisions can live elsewhere
+and use Adaptive TTS only as the voice-control endpoint when needed.
 
 ## License
 
