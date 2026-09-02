@@ -80,14 +80,17 @@ async def test_config_flow_rejects_missing_provider(hass) -> None:
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        with pytest.raises(data_entry_flow.InvalidData):
-            await hass.config_entries.flow.async_configure(
-                result["flow_id"],
-                {
-                    CONF_NAME: "Bedroom TTS",
-                    CONF_UNDERLYING_TTS_ENTITY: "tts.source",
-                },
-            )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Bedroom TTS",
+                CONF_UNDERLYING_TTS_ENTITY: "tts.source",
+            },
+        )
+
+    assert result["type"] is data_entry_flow.FlowResultType.FORM
+    assert result["step_id"] == "user"
+    assert result["errors"] == {CONF_UNDERLYING_TTS_ENTITY: "provider_not_found"}
 
 
 @pytest.mark.asyncio
