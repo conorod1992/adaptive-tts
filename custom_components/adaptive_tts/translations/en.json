@@ -4,45 +4,16 @@
     "step": {
       "user": {
         "title": "Create an Adaptive TTS entity",
-        "description": "Choose the TTS entity Adaptive TTS should wrap.",
+        "description": "Choose the TTS entity Adaptive TTS should wrap. Voice changes are controlled through Adaptive TTS actions or the integration panel.",
         "data": {
           "name": "Name",
           "underlying_tts_entity": "Underlying TTS entity"
-        }
-      },
-      "policy": {
-        "title": "Configure quiet hours",
-        "description": "The selected provider's supported option names are shown below. Home Assistant Cloud voice variants use the voice option. If the start and end times are the same, quiet mode is active all day.",
-        "data": {
-          "quiet_mode": "Quiet mode enabled",
-          "quiet_start": "Quiet hours start",
-          "quiet_end": "Quiet hours end",
-          "quiet_option": "Voice/style option to override"
-        }
-      },
-      "language": {
-        "title": "Choose quiet voice language",
-        "description": "Choose the language/accent family to use during quiet hours. The next step will show voices available for this language. This can differ from the Assist pipeline language.",
-        "data": {
-          "quiet_language": "Quiet voice language"
-        }
-      },
-      "override": {
-        "title": "Configure the quiet override",
-        "description": "Choose a listed voice when the provider supplies a voice list. Providers that cannot enumerate voices allow an exact voice/style value instead.",
-        "data": {
-          "quiet_value": "Quiet voice/style value"
         }
       }
     },
     "error": {
       "provider_not_found": "The selected TTS entity is not currently available.",
-      "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
-      "unsupported_option": "The selected option is not supported by this provider.",
-      "unsupported_language": "The selected language is not supported by this provider.",
-      "unsupported_voice": "The selected voice is not available for this provider and language.",
-      "override_required": "Enter a quiet voice/style value.",
-      "provider_details_unavailable": "The selected TTS provider details could not be read. Try again after the provider recovers."
+      "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities."
     },
     "abort": {
       "provider_not_found": "The selected TTS entity is no longer available."
@@ -52,43 +23,15 @@
     "step": {
       "init": {
         "title": "Change underlying provider",
+        "description": "Choose the TTS entity Adaptive TTS should wrap.",
         "data": {
           "underlying_tts_entity": "Underlying TTS entity"
-        }
-      },
-      "policy": {
-        "title": "Update quiet hours",
-        "description": "If the start and end times are the same, quiet mode is active all day.",
-        "data": {
-          "quiet_mode": "Quiet mode enabled",
-          "quiet_start": "Quiet hours start",
-          "quiet_end": "Quiet hours end",
-          "quiet_option": "Voice/style option to override"
-        }
-      },
-      "language": {
-        "title": "Choose quiet voice language",
-        "description": "Choose the language/accent family to use during quiet hours. The next step will show voices available for this language. This can differ from the Assist pipeline language.",
-        "data": {
-          "quiet_language": "Quiet voice language"
-        }
-      },
-      "override": {
-        "title": "Update the quiet override",
-        "description": "Choose a listed voice when the provider supplies a voice list. Providers that cannot enumerate voices allow an exact voice/style value instead.",
-        "data": {
-          "quiet_value": "Quiet voice/style value"
         }
       }
     },
     "error": {
       "provider_not_found": "The selected TTS entity is not currently available.",
-      "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities.",
-      "unsupported_option": "The selected option is not supported by this provider.",
-      "unsupported_language": "The selected language is not supported by this provider.",
-      "unsupported_voice": "The selected voice is not available for this provider and language.",
-      "override_required": "Enter a quiet voice/style value.",
-      "provider_details_unavailable": "The selected TTS provider details could not be read. Try again after the provider recovers."
+      "recursive_provider": "Adaptive TTS entities cannot wrap other Adaptive TTS entities."
     },
     "abort": {
       "provider_not_found": "The selected TTS entity is no longer available."
