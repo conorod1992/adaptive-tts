@@ -11,7 +11,12 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import CONF_UNDERLYING_TTS_ENTITY, DOMAIN
-from .helpers import entry_config, get_tts_entity, is_adaptive_entity, selectable_tts_entities
+from .helpers import (
+    entry_config,
+    get_tts_entity,
+    is_adaptive_entity,
+    selectable_tts_entities,
+)
 
 
 def _provider_selector(hass, default: str | None = None) -> selector.EntitySelector:
