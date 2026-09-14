@@ -89,7 +89,7 @@ jobs:
             echo "existing_tag=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Update manifest version
+      - name: Update release version sources
         if: steps.version.outputs.needs_bump == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -97,12 +97,50 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
 
-          path = Path("custom_components/adaptive_tts/manifest.json")
-          data = json.loads(path.read_text(encoding="utf-8"))
-          data["version"] = os.environ["VERSION"]
-          path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          version = os.environ["VERSION"]
+
+          manifest_path = Path("custom_components/adaptive_tts/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          manifest["version"] = version
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+
+          const_path = Path("custom_components/adaptive_tts/const.py")
+          const_text = const_path.read_text(encoding="utf-8")
+          updated, count = re.subn(
+              r'(?m)^VERSION: Final = "[^"]+"$',
+              f'VERSION: Final = "{version}"',
+              const_text,
+          )
+          if count != 1:
+              raise SystemExit(
+                  f"Expected exactly one runtime VERSION constant, found {count}"
+              )
+          const_path.write_text(updated, encoding="utf-8")
+          PY
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          namespace = {}
+          exec(
+              Path("custom_components/adaptive_tts/const.py").read_text(encoding="utf-8"),
+              namespace,
+          )
+          manifest = json.loads(
+              Path("custom_components/adaptive_tts/manifest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          if manifest["version"] != namespace["VERSION"]:
+              raise SystemExit(
+                  "Manifest version and runtime VERSION are not synchronized"
+              )
           PY
 
       - name: Commit and push version bump
@@ -113,7 +151,9 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add custom_components/adaptive_tts/manifest.json
+          git add \
+            custom_components/adaptive_tts/manifest.json \
+            custom_components/adaptive_tts/const.py
           git diff --cached --check
           git commit -m "Release $VERSION"
           git push origin HEAD:main
@@ -125,6 +165,37 @@ jobs:
           git fetch origin main --tags
           git reset --hard origin/main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release version sources
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          expected = os.environ["VERSION"]
+          manifest = json.loads(
+              Path("custom_components/adaptive_tts/manifest.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          const_text = Path("custom_components/adaptive_tts/const.py").read_text(
+              encoding="utf-8"
+          )
+          match = re.search(r'(?m)^VERSION: Final = "([^"]+)"$', const_text)
+          if match is None:
+              raise SystemExit("Could not find runtime VERSION constant")
+          runtime_version = match.group(1)
+          if manifest["version"] != expected or runtime_version != expected:
+              raise SystemExit(
+                  "Release version sources are not synchronized: "
+                  f"manifest={manifest['version']} runtime={runtime_version} "
+                  f"expected={expected}"
+              )
+          PY
 
       - name: Dispatch full validation for release commit
         id: validation
