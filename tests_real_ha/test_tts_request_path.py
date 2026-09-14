@@ -87,6 +87,4 @@ async def test_real_ha_manager_routes_request_through_loaded_adaptive_entity(
 
     assert stream.extension == "mp3"
     assert audio == b"real-ha-adaptive-audio"
-    assert provider.calls == [
-        ("Real HA request", "en-US", {"voice": "acceptance"})
-    ]
+    assert provider.calls == [("Real HA request", "en-US", {"voice": "acceptance"})]
