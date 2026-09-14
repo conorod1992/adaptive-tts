@@ -1,0 +1,207 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Stable semantic version to release (for example 2.1.0)"
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate requested version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          git reset --hard origin/main
+
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          manifest_path = Path("custom_components/adaptive_tts/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          current = manifest["version"]
+          requested = os.environ["REQUESTED_VERSION"].strip()
+
+          pattern = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+          current_match = pattern.fullmatch(current)
+          requested_match = pattern.fullmatch(requested)
+          if current_match is None:
+              raise SystemExit(f"Current manifest version is not stable SemVer: {current}")
+          if requested_match is None:
+              raise SystemExit(
+                  f"Requested version must be stable SemVer in X.Y.Z form: {requested}"
+              )
+
+          current_tuple = tuple(int(part) for part in current_match.groups())
+          requested_tuple = tuple(int(part) for part in requested_match.groups())
+          if requested_tuple < current_tuple:
+              raise SystemExit(
+                  f"Requested version {requested} is older than current version {current}"
+              )
+
+          print(f"current={current}")
+          print(f"version={requested}")
+          print(f"needs_bump={'true' if requested_tuple > current_tuple else 'false'}")
+          PY
+
+          VERSION="${{ inputs.version }}"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists."
+            exit 1
+          fi
+
+          TAG_SHA="$(git rev-list -n 1 "$VERSION" 2>/dev/null || true)"
+          if [[ -n "$TAG_SHA" ]]; then
+            CURRENT_VERSION="$(python -c 'import json; print(json.load(open("custom_components/adaptive_tts/manifest.json"))["version"])')"
+            if [[ "$CURRENT_VERSION" != "$VERSION" || "$TAG_SHA" != "$(git rev-parse HEAD)" ]]; then
+              echo "Tag $VERSION already exists but does not represent the current unreleased main commit."
+              exit 1
+            fi
+            echo "existing_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "existing_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update manifest version
+        if: steps.version.outputs.needs_bump == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("custom_components/adaptive_tts/manifest.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          data["version"] = os.environ["VERSION"]
+          path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Commit and push version bump
+        if: steps.version.outputs.needs_bump == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/adaptive_tts/manifest.json
+          git diff --cached --check
+          git commit -m "Release $VERSION"
+          git push origin HEAD:main
+
+      - name: Resolve release commit
+        id: commit
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          git reset --hard origin/main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch full validation for release commit
+        id: validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.commit.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run validate.yml --ref main
+
+          RUN_ID=""
+          for _ in {1..30}; do
+            RUN_ID="$(
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/validate.yml/runs?event=workflow_dispatch&branch=main&per_page=20" \
+                --jq ".workflow_runs[] | select(.head_sha == \"$RELEASE_SHA\") | .id" \
+                | head -n 1
+            )"
+            if [[ -n "$RUN_ID" ]]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ -z "$RUN_ID" ]]; then
+            echo "Could not find a Validate workflow run for release commit $RELEASE_SHA."
+            exit 1
+          fi
+
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Validation run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$RUN_ID"
+
+      - name: Wait for validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.validation.outputs.run_id }}
+        run: gh run watch "$RUN_ID" --exit-status
+
+      - name: Confirm main did not move
+        env:
+          RELEASE_SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          CURRENT_MAIN="$(git rev-parse origin/main)"
+          if [[ "$CURRENT_MAIN" != "$RELEASE_SHA" ]]; then
+            echo "main moved from $RELEASE_SHA to $CURRENT_MAIN while the release was validating."
+            echo "Run the release workflow again so the new main head is validated and released."
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_SHA: ${{ steps.commit.outputs.sha }}
+          EXISTING_TAG: ${{ steps.version.outputs.existing_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EXISTING_TAG" == "true" ]]; then
+            gh release create "$VERSION" \
+              --verify-tag \
+              --title "$VERSION" \
+              --generate-notes
+          else
+            gh release create "$VERSION" \
+              --target "$RELEASE_SHA" \
+              --title "$VERSION" \
+              --generate-notes
+          fi
+
+      - name: Release summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "### Released $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Version bump, full validation, tag creation, and GitHub release completed successfully." >> "$GITHUB_STEP_SUMMARY"
