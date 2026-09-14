@@ -22,82 +22,171 @@ class AdaptiveTtsRootPanel extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this.shadowRoot.innerHTML = `
       <style>
-        :host { display: block; color: var(--primary-text-color); }
-        .routing-page { max-width: 880px; margin: 0 auto; padding: 24px 24px 0; }
-        ha-card { padding: 24px; }
-        h2 { margin: 0 0 8px; font-size: 20px; font-weight: 500; }
-        h3 { margin: 0; font-size: 17px; font-weight: 500; }
-        p { line-height: 1.45; }
+        :host {
+          display: block;
+          color: var(--primary-text-color);
+          --routing-surface: color-mix(in srgb, var(--card-background-color) 94%, var(--primary-color) 6%);
+          --routing-border: color-mix(in srgb, var(--divider-color) 72%, var(--primary-color) 28%);
+          --routing-accent-soft: color-mix(in srgb, var(--primary-color) 10%, transparent);
+        }
+        .routing-page { max-width: 1040px; margin: 0 auto; padding: 24px 24px 0; }
+        ha-card { overflow: hidden; }
+        .routing-shell { padding: 28px; }
+        .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+        .eyebrow {
+          margin-bottom: 5px; color: var(--primary-color); font-size: 11px;
+          font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+        }
+        h2 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; }
+        h3 { margin: 0; font-size: 17px; font-weight: 600; }
+        p { line-height: 1.5; }
         .intro, .help { color: var(--secondary-text-color); }
-        .intro { margin: 0 0 18px; }
-        .help { font-size: 13px; margin: 6px 0 0; }
-        .toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: 16px; align-items: end; }
-        label.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--secondary-text-color); }
+        .intro { max-width: 760px; margin: 8px 0 0; }
+        .help { font-size: 13px; line-height: 1.45; margin: 6px 0 0; }
+        .toolbar {
+          display: grid; grid-template-columns: minmax(260px, 1fr) auto; gap: 16px;
+          align-items: end; padding: 18px; border: 1px solid var(--divider-color);
+          border-radius: 12px; background: var(--secondary-background-color);
+        }
+        label.field { display: flex; flex-direction: column; gap: 7px; font-size: 13px; color: var(--secondary-text-color); }
+        .field-label { color: var(--primary-text-color); font-weight: 500; }
         select, input[type="text"] {
-          box-sizing: border-box; width: 100%; padding: 10px 12px;
+          box-sizing: border-box; width: 100%; min-height: 42px; padding: 10px 12px;
           color: var(--primary-text-color); background: var(--card-background-color);
-          border: 1px solid var(--divider-color); border-radius: 4px; font: inherit;
+          border: 1px solid var(--divider-color); border-radius: 8px; font: inherit;
+          transition: border-color .15s ease, box-shadow .15s ease;
+        }
+        select:focus, input[type="text"]:focus {
+          outline: none; border-color: var(--primary-color);
+          box-shadow: 0 0 0 2px var(--routing-accent-soft);
         }
         button {
-          border: 0; border-radius: 4px; padding: 10px 16px; cursor: pointer;
-          color: var(--text-primary-color); background: var(--primary-color); font: inherit;
+          min-height: 40px; border: 0; border-radius: 8px; padding: 10px 16px;
+          cursor: pointer; color: var(--text-primary-color); background: var(--primary-color);
+          font: inherit; font-weight: 500; transition: opacity .15s ease, background .15s ease;
         }
         button.secondary {
-          color: var(--primary-text-color); background: transparent;
+          color: var(--primary-text-color); background: var(--card-background-color);
           border: 1px solid var(--divider-color);
         }
+        button.secondary:hover:not([disabled]) { background: var(--secondary-background-color); }
         button.danger { color: var(--error-color); }
-        button.icon { padding: 7px 10px; min-width: 40px; }
-        button[disabled] { opacity: .5; cursor: default; }
-        .rules { display: grid; gap: 14px; margin-top: 18px; }
+        button.icon { min-width: 40px; padding: 8px 11px; font-size: 16px; }
+        button[disabled] { opacity: .45; cursor: default; }
+        #add-rule { white-space: nowrap; }
+        .precedence {
+          display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start;
+          margin: 14px 0 0; padding: 14px 16px; border-radius: 10px;
+          background: var(--routing-accent-soft); border: 1px solid var(--routing-border); font-size: 13px;
+        }
+        .precedence-badge {
+          padding: 3px 8px; border-radius: 999px; color: var(--primary-color);
+          background: var(--card-background-color); font-size: 11px; font-weight: 700;
+          letter-spacing: .04em; text-transform: uppercase;
+        }
+        .rules { display: grid; gap: 18px; margin-top: 22px; }
         .rule {
-          border: 1px solid var(--divider-color); border-radius: 8px; padding: 16px;
-          display: grid; gap: 16px; background: var(--card-background-color);
+          overflow: hidden; border: 1px solid var(--divider-color); border-radius: 14px;
+          background: var(--card-background-color); box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+          transition: opacity .15s ease, border-color .15s ease;
         }
-        .rule.disabled { opacity: .7; }
-        .rule-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-        .priority { color: var(--secondary-text-color); font-size: 13px; min-width: 74px; }
-        .rule-title { flex: 1; min-width: 180px; }
+        .rule.disabled { opacity: .62; }
+        .rule-head {
+          display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px;
+          align-items: start; padding: 18px 20px; background: var(--routing-surface);
+          border-bottom: 1px solid var(--divider-color);
+        }
+        .rule-identity { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; }
+        .priority {
+          display: inline-flex; align-items: center; justify-content: center; min-width: 74px;
+          height: 28px; padding: 0 10px; border-radius: 999px; color: var(--primary-color);
+          background: var(--routing-accent-soft); font-size: 12px; font-weight: 700;
+        }
+        .rule-title { min-width: 0; }
+        .rule-title input { margin-top: 2px; font-size: 15px; font-weight: 500; }
+        .rule-head-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+        .enabled {
+          display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 11px;
+          border: 1px solid var(--divider-color); border-radius: 8px; background: var(--card-background-color);
+          font-size: 13px; font-weight: 500;
+        }
+        .enabled input { width: 16px; height: 16px; accent-color: var(--primary-color); }
         .rule-actions { display: flex; gap: 6px; }
-        .enabled { display: flex; gap: 8px; align-items: center; font-size: 13px; }
-        .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-        .conditions { border-top: 1px solid var(--divider-color); padding-top: 14px; }
-        .conditions-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
-        .empty {
-          margin-top: 18px; padding: 18px; border: 1px dashed var(--divider-color);
-          border-radius: 8px; color: var(--secondary-text-color); text-align: center;
+        .rule-body { display: grid; gap: 20px; padding: 20px; }
+        .voice-section {
+          display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;
+          padding: 16px; border-radius: 10px; background: var(--secondary-background-color);
         }
-        .actions { margin-top: 18px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-        .status { font-size: 13px; }
+        .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 5px; }
+        .conditions {
+          padding: 17px; border: 1px solid var(--divider-color); border-radius: 10px;
+          background: var(--card-background-color);
+        }
+        .conditions-title { font-size: 15px; font-weight: 600; }
+        .condition-host {
+          margin-top: 14px; padding: 12px; border-radius: 8px;
+          background: var(--secondary-background-color);
+        }
+        .empty {
+          margin-top: 22px; padding: 30px 22px; border: 1px dashed var(--divider-color);
+          border-radius: 12px; color: var(--secondary-text-color); text-align: center;
+          background: var(--secondary-background-color);
+        }
+        .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .routing-test-actions {
+          margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--divider-color);
+        }
+        .save-bar {
+          display: flex; align-items: center; justify-content: space-between; gap: 14px;
+          margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--divider-color);
+        }
+        .save-bar .actions { margin: 0; }
+        .status { font-size: 13px; color: var(--secondary-text-color); }
         .error { color: var(--error-color); white-space: pre-wrap; }
         .success { color: var(--success-color, var(--primary-color)); }
-        .precedence {
-          margin: 16px 0 0; padding: 12px 14px; border-radius: 6px;
-          background: var(--secondary-background-color); font-size: 13px;
-        }
-        @media (max-width: 700px) {
+        @media (max-width: 760px) {
           .routing-page { padding: 12px 12px 0; }
-          ha-card { padding: 18px; }
-          .toolbar, .grid { grid-template-columns: 1fr; }
+          .routing-shell { padding: 18px; }
+          .page-head { display: block; }
+          .toolbar, .voice-section, .rule-head { grid-template-columns: 1fr; }
+          .rule-head-actions { justify-content: flex-start; }
+          .rule-actions { flex-wrap: wrap; }
+          .save-bar { align-items: flex-start; flex-direction: column; }
+        }
+        @media (max-width: 480px) {
+          .rule-identity { grid-template-columns: 1fr; }
+          .priority { justify-self: start; }
+          .rule-head-actions { display: grid; grid-template-columns: 1fr; width: 100%; }
           .rule-actions { width: 100%; }
+          .rule-actions button { flex: 1; }
         }
       </style>
       <div class="routing-page">
         <ha-card>
-          <h2>Conditional Voice Routing</h2>
-          <p class="intro">Automatically choose a voice when Home Assistant conditions are true. Rules are checked from top to bottom and the <strong>first matching enabled rule</strong> is used.</p>
-          <div class="toolbar">
-            <label class="field">Adaptive TTS entity
-              <select id="routing-engine"></select>
-              <span class="help">Rules belong to the selected Adaptive TTS entity and use voices from its wrapped provider.</span>
-            </label>
-            <button id="add-rule" class="secondary">Add rule</button>
-          </div>
-          <div class="precedence"><strong>Priority:</strong> a manual next-response or continuous voice override always wins over Conditional Voice Routing. When the manual override ends, matching rules take effect again automatically.</div>
-          <div id="rules" class="rules"></div>
-          <div class="actions">
-            <button id="save-rules">Save routing rules</button>
-            <span id="routing-status" class="status" role="status"></span>
+          <div class="routing-shell">
+            <div class="page-head">
+              <div>
+                <div class="eyebrow">Adaptive TTS</div>
+                <h2>Conditional Voice Routing</h2>
+                <p class="intro">Build an ordered voice policy from Home Assistant conditions. Rules are evaluated from top to bottom and the <strong>first matching enabled rule</strong> is used.</p>
+              </div>
+            </div>
+            <div class="toolbar">
+              <label class="field"><span class="field-label">Adaptive TTS entity</span>
+                <select id="routing-engine"></select>
+                <span class="help">Rules are stored per Adaptive TTS entity and use voices exposed by its wrapped provider.</span>
+              </label>
+              <button id="add-rule" class="secondary">+ Add rule</button>
+            </div>
+            <div class="precedence">
+              <span class="precedence-badge">Priority</span>
+              <span>A manual next-response or continuous voice override always wins. When that override ends, matching routing rules take effect automatically.</span>
+            </div>
+            <div id="rules" class="rules"></div>
+            <div class="save-bar">
+              <div class="actions"><button id="save-rules">Save routing rules</button></div>
+              <span id="routing-status" class="status" role="status"></span>
+            </div>
           </div>
         </ha-card>
       </div>
@@ -193,7 +282,7 @@ class AdaptiveTtsRootPanel extends HTMLElement {
     if (!this._rules?.length) {
       const empty = document.createElement("div");
       empty.className = "empty";
-      empty.textContent = "No routing rules yet. Add a rule to choose a voice from Home Assistant conditions.";
+      empty.innerHTML = "<strong>No routing rules yet.</strong><br>Add a rule to automatically choose a voice from Home Assistant conditions.";
       container.append(empty);
       return;
     }
@@ -204,23 +293,29 @@ class AdaptiveTtsRootPanel extends HTMLElement {
       card.className = `rule${rule.enabled === false ? " disabled" : ""}`;
       card.innerHTML = `
         <div class="rule-head">
-          <span class="priority">Priority ${index + 1}</span>
-          <label class="enabled"><input class="rule-enabled" type="checkbox" ${rule.enabled === false ? "" : "checked"}> Enabled</label>
-          <label class="field rule-title">Rule name<input class="rule-name" type="text" maxlength="100"></label>
-          <div class="rule-actions">
-            <button class="secondary icon move-up" title="Move rule up" ${index === 0 ? "disabled" : ""}>↑</button>
-            <button class="secondary icon move-down" title="Move rule down" ${index === this._rules.length - 1 ? "disabled" : ""}>↓</button>
-            <button class="secondary danger delete-rule">Delete</button>
+          <div class="rule-identity">
+            <span class="priority">Priority ${index + 1}</span>
+            <label class="field rule-title"><span class="field-label">Rule name</span><input class="rule-name" type="text" maxlength="100"></label>
+          </div>
+          <div class="rule-head-actions">
+            <label class="enabled"><input class="rule-enabled" type="checkbox" ${rule.enabled === false ? "" : "checked"}> Enabled</label>
+            <div class="rule-actions">
+              <button class="secondary icon move-up" title="Move rule up" aria-label="Move rule up" ${index === 0 ? "disabled" : ""}>↑</button>
+              <button class="secondary icon move-down" title="Move rule down" aria-label="Move rule down" ${index === this._rules.length - 1 ? "disabled" : ""}>↓</button>
+              <button class="secondary danger delete-rule">Delete</button>
+            </div>
           </div>
         </div>
-        <div class="grid">
-          <label class="field">Language<select class="rule-language"></select><span class="help">The language used when this rule selects its voice.</span></label>
-          <label class="field">Voice<select class="rule-voice"></select><span class="help">Applied only when this is the first enabled rule whose conditions match.</span></label>
-        </div>
-        <div class="conditions">
-          <div class="conditions-title">Conditions</div>
-          <p class="help">Use Home Assistant's native condition editor. You can add multiple conditions and AND / OR / NOT building blocks. All top-level conditions must be true.</p>
-          <div class="condition-host"></div>
+        <div class="rule-body">
+          <div class="voice-section">
+            <label class="field"><span class="field-label">Language</span><select class="rule-language"></select><span class="help">Language used when this rule wins.</span></label>
+            <label class="field"><span class="field-label">Voice</span><select class="rule-voice"></select><span class="help">Voice applied when this is the highest-priority matching rule.</span></label>
+          </div>
+          <div class="conditions">
+            <div class="section-heading"><div class="conditions-title">Conditions</div><span class="help">All top-level conditions must be true</span></div>
+            <p class="help">Use Home Assistant's native condition editor. You can add multiple conditions and AND / OR / NOT building blocks.</p>
+            <div class="condition-host"></div>
+          </div>
         </div>`;
 
       card.querySelector(".rule-name").value = rule.name || "";
