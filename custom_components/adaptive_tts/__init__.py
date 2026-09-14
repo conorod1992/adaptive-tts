@@ -32,6 +32,7 @@ from .const import (
 )
 from .helpers import entry_config, is_adaptive_entity
 from .preview import async_register_websocket_commands
+from .routing import async_register_websocket_commands as async_register_routing_commands
 from .services import async_register_services
 from .tts import async_remove_voice_override_storage
 
@@ -72,10 +73,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             frontend_url_path=PANEL_URL_PATH,
             config_panel_domain=DOMAIN,
             webcomponent_name=PANEL_WEB_COMPONENT,
-            module_url=f"{STATIC_URL_PATH}/adaptive-tts-panel.js",
+            module_url=f"{STATIC_URL_PATH}/adaptive-tts-root-panel.js",
             require_admin=True,
         )
         async_register_websocket_commands(hass)
+        async_register_routing_commands(hass)
         domain_data[DATA_FRONTEND_REGISTERED] = True
 
     if not domain_data[DATA_SERVICES_REGISTERED]:
