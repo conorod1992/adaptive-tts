@@ -120,4 +120,6 @@ async def test_websocket_routing_save_reloads_entry_and_changes_live_behavior(
 
     assert stream.extension == "mp3"
     assert audio == b"routing-save-reload-audio"
-    assert provider.calls == [("Use the saved route", "en-GB", {"voice": "saved-routed-voice"})]
+    assert provider.calls == [
+        ("Use the saved route", "en-GB", {"voice": "saved-routed-voice"})
+    ]
