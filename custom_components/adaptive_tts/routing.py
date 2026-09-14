@@ -13,8 +13,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.condition import (
     ConditionChecker,
-    async_from_config as async_condition_from_config,
     async_validate_condition_config,
+)
+from homeassistant.helpers.condition import (
+    async_from_config as async_condition_from_config,
 )
 
 from .const import CONF_ROUTING_RULES, DATA_ENTITIES, DOMAIN
@@ -212,7 +214,7 @@ def websocket_routing_get(
     """Return ordered routing rules for one Adaptive TTS entity."""
     try:
         entity = _adaptive_entity(hass, msg["entity_id"])
-        rules = {**entity._entry.data, **entity._entry.options}.get(  # noqa: SLF001
+        rules = {**entity._entry.data, **entity._entry.options}.get(
             CONF_ROUTING_RULES, []
         )
     except HomeAssistantError as err:
@@ -241,7 +243,7 @@ async def websocket_routing_save(
     try:
         entity = _adaptive_entity(hass, msg["entity_id"])
         rules = await _validate_rules(hass, msg["rules"])
-        entry = entity._entry  # noqa: SLF001
+        entry = entity._entry
         options = dict(entry.options)
         if rules:
             options[CONF_ROUTING_RULES] = rules
