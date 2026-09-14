@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-      - run: python -m pip install -r requirements_test.txt
+      - run: python -m pip install -r requirements_real_ha.txt
       - run: python -m pytest tests_real_ha
 
   hassfest:
