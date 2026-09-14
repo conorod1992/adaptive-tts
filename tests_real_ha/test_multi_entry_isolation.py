@@ -83,8 +83,10 @@ async def test_two_loaded_entries_keep_provider_and_override_state_isolated(
         side_effect=provider_lookup,
     ):
         assert await hass.config_entries.async_setup(entry_a.entry_id) is True
-        assert await hass.config_entries.async_setup(entry_b.entry_id) is True
         await hass.async_block_till_done()
+        if entry_b.state is ConfigEntryState.NOT_LOADED:
+            assert await hass.config_entries.async_setup(entry_b.entry_id) is True
+            await hass.async_block_till_done()
 
         assert entry_a.state is ConfigEntryState.LOADED
         assert entry_b.state is ConfigEntryState.LOADED
@@ -127,9 +129,5 @@ async def test_two_loaded_entries_keep_provider_and_override_state_isolated(
     assert stream_b.extension == "mp3"
     assert audio_a == b"A:Request A"
     assert audio_b == b"B:Request B"
-    assert provider_a.calls == [
-        ("Request A", "en-US", {"voice": "a-manual"})
-    ]
-    assert provider_b.calls == [
-        ("Request B", "en-GB", {"voice": "b-default"})
-    ]
+    assert provider_a.calls == [("Request A", "en-US", {"voice": "a-manual"})]
+    assert provider_b.calls == [("Request B", "en-GB", {"voice": "b-default"})]
