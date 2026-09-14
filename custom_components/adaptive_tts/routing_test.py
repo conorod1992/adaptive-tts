@@ -62,7 +62,10 @@ async def websocket_routing_test(
     results: list[bool] = []
     all_checkers: list[ConditionChecker] = []
     try:
-        for index, raw_rule in enumerate(rules):
+        # Only higher-priority rules can prevent the target from winning. Lower
+        # draft rules are deliberately ignored so an unfinished rule below the
+        # target cannot make its Test conditions action fail.
+        for index, raw_rule in enumerate(rules[: target_index + 1]):
             if not isinstance(raw_rule, dict):
                 raise vol.Invalid(f"Rule {index + 1} must be an object")
             matched, checkers = await _test_condition_list(
@@ -74,7 +77,9 @@ async def websocket_routing_test(
         winner_index = next(
             (
                 index
-                for index, (rule, matched) in enumerate(zip(rules, results, strict=True))
+                for index, (rule, matched) in enumerate(
+                    zip(rules[: target_index + 1], results, strict=True)
+                )
                 if rule.get("enabled", True) and matched
             ),
             None,
@@ -83,7 +88,9 @@ async def websocket_routing_test(
         target_enabled = bool(target.get("enabled", True))
         winner_name = None
         if winner_index is not None:
-            winner_name = str(rules[winner_index].get("name") or f"Rule {winner_index + 1}")
+            winner_name = str(
+                rules[winner_index].get("name") or f"Rule {winner_index + 1}"
+            )
 
         connection.send_result(
             msg["id"],
