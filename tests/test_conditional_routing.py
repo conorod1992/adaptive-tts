@@ -105,9 +105,7 @@ async def test_manual_next_request_override_beats_routing(hass, tmp_path) -> Non
         return_value=source,
     ):
         await entity.async_load_voice_override(hass)
-        await entity.async_set_voice_override(
-            "en-US", "normal", DURATION_NEXT_REQUEST
-        )
+        await entity.async_set_voice_override("en-US", "normal", DURATION_NEXT_REQUEST)
         snapshot = entity._current_policy_snapshot()
 
     assert snapshot.override_scope == SCOPE_NEXT_REQUEST
@@ -136,9 +134,7 @@ async def test_routing_state_is_part_of_cache_policy_snapshot(hass, tmp_path) ->
         normal_policy = entity.default_options[CACHE_POLICY_OPTION]
         hass.states.async_set("input_boolean.route", "on")
         routed_policy = entity.default_options[CACHE_POLICY_OPTION]
-        resolved = entity.resolve_request(
-            "en-US", {CACHE_POLICY_OPTION: routed_policy}
-        )
+        resolved = entity.resolve_request("en-US", {CACHE_POLICY_OPTION: routed_policy})
 
     assert normal_policy != routed_policy
     assert resolved.options["voice"] == "whisper"
