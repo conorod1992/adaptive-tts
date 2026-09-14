@@ -251,15 +251,11 @@ async def websocket_routing_save(
             options.pop(CONF_ROUTING_RULES, None)
         hass.config_entries.async_update_entry(entry, options=options)
     except (HomeAssistantError, vol.Invalid) as err:
-        connection.send_error(
-            msg["id"], websocket_api.ERR_INVALID_FORMAT, str(err)
-        )
+        connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, str(err))
         return
     except Exception as err:
         _LOGGER.exception("Could not save Conditional Voice Routing rules")
-        connection.send_error(
-            msg["id"], websocket_api.ERR_UNKNOWN_ERROR, str(err)
-        )
+        connection.send_error(msg["id"], websocket_api.ERR_UNKNOWN_ERROR, str(err))
         return
     connection.send_result(msg["id"], {"saved": True, "rules": rules})
 
