@@ -130,6 +130,4 @@ async def test_real_ha_manager_applies_first_matching_conditional_route(
 
     assert stream.extension == "mp3"
     assert audio == b"real-ha-routed-audio"
-    assert provider.calls == [
-        ("Route this request", "en-GB", {"voice": "routed-voice"})
-    ]
+    assert provider.calls == [("Route this request", "en-GB", {"voice": "routed-voice"})]
