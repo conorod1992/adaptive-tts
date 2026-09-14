@@ -4,6 +4,34 @@ const RootPanel = customElements.get("adaptive-tts-root-panel");
 if (RootPanel && !RootPanel.prototype._routingTestEnhanced) {
   RootPanel.prototype._routingTestEnhanced = true;
 
+  const originalEngineChanged = RootPanel.prototype._engineChanged;
+  RootPanel.prototype._engineChanged = async function (...args) {
+    const select = this.shadowRoot?.getElementById("routing-engine");
+    const nextEntityId = select?.value || "";
+    const currentEntityId = this._routingLoadedEntityId || "";
+
+    if (
+      this._dirty &&
+      currentEntityId &&
+      nextEntityId &&
+      nextEntityId !== currentEntityId
+    ) {
+      const discard = globalThis.confirm(
+        "Discard unsaved routing changes and switch Adaptive TTS entity?"
+      );
+      if (!discard) {
+        select.value = currentEntityId;
+        this._setStatus("Unsaved changes.");
+        return;
+      }
+    }
+
+    await originalEngineChanged.apply(this, args);
+    if (!this._dirty && select?.value) {
+      this._routingLoadedEntityId = select.value;
+    }
+  };
+
   const originalRenderRules = RootPanel.prototype._renderRules;
   RootPanel.prototype._renderRules = async function (...args) {
     await originalRenderRules.apply(this, args);
