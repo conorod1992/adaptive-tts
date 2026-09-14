@@ -105,13 +105,9 @@ async def websocket_routing_test(
             },
         )
     except vol.Invalid as err:
-        connection.send_error(
-            msg["id"], websocket_api.ERR_INVALID_FORMAT, str(err)
-        )
+        connection.send_error(msg["id"], websocket_api.ERR_INVALID_FORMAT, str(err))
     except Exception as err:
-        connection.send_error(
-            msg["id"], websocket_api.ERR_UNKNOWN_ERROR, str(err)
-        )
+        connection.send_error(msg["id"], websocket_api.ERR_UNKNOWN_ERROR, str(err))
     finally:
         for checker in all_checkers:
             checker.async_unload()
