@@ -14,6 +14,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
 
+from . import tts as tts_platform
 from .const import (
     CONF_QUIET_END,
     CONF_QUIET_LANGUAGE,
@@ -33,6 +34,7 @@ from .const import (
 from .helpers import entry_config, is_adaptive_entity
 from .preview import async_register_websocket_commands
 from .routing import async_register_websocket_commands as async_register_routing_commands
+from .routing_entity import RoutedAdaptiveTTSEntity
 from .services import async_register_services
 from .tts import async_remove_voice_override_storage
 
@@ -115,6 +117,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "Adaptive TTS entities cannot wrap other Adaptive TTS entities"
         )
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+
+    # Keep the mature TTS platform implementation intact while selecting the
+    # policy-aware subclass that adds Conditional Voice Routing.
+    tts_platform.AdaptiveTTSEntity = RoutedAdaptiveTTSEntity
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     @callback
