@@ -99,9 +99,7 @@ async def test_routing_checkers_are_released_across_reloads_and_final_unload(
         for cycle in range(3):
             stream = ha_tts.async_create_stream(hass, entity_id)
             stream.async_set_message(f"Cycle {cycle}")
-            audio = b"".join(
-                [chunk async for chunk in stream.async_stream_result()]
-            )
+            audio = b"".join([chunk async for chunk in stream.async_stream_result()])
             assert audio == f"audio:Cycle {cycle}".encode()
 
             retired_entities.append(entity)
