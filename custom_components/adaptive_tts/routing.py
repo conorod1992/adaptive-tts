@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.condition import (
     ConditionChecker,
-    async_condition_from_config,
+    async_from_config as async_condition_from_config,
     async_validate_condition_config,
 )
 
@@ -218,7 +218,9 @@ def websocket_routing_get(
     except HomeAssistantError as err:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, str(err))
         return
-    connection.send_result(msg["id"], {"rules": rules if isinstance(rules, list) else []})
+    connection.send_result(
+        msg["id"], {"rules": rules if isinstance(rules, list) else []}
+    )
 
 
 @websocket_api.require_admin
