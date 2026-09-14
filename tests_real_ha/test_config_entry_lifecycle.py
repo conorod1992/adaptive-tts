@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 from homeassistant.components.tts import TextToSpeechEntity
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -80,7 +81,11 @@ async def test_config_entry_load_unload_reload_uses_real_ha_platform(hass) -> No
 
         assert entry.state is ConfigEntryState.NOT_LOADED
         assert entry.entry_id not in hass.data[DOMAIN][DATA_ENTITIES]
-        assert hass.states.get(entity_id) is None
+        unloaded_state = hass.states.get(entity_id)
+        assert unloaded_state is None or (
+            unloaded_state.state == STATE_UNAVAILABLE
+            and unloaded_state.attributes.get("restored") is True
+        )
 
         assert await hass.config_entries.async_setup(entry.entry_id) is True
         await hass.async_block_till_done()
@@ -90,7 +95,9 @@ async def test_config_entry_load_unload_reload_uses_real_ha_platform(hass) -> No
         assert isinstance(reloaded_entity, RoutedAdaptiveTTSEntity)
         assert reloaded_entity is not first_entity
         assert reloaded_entity.entity_id == entity_id
-        assert hass.states.get(entity_id) is not None
+        reloaded_state = hass.states.get(entity_id)
+        assert reloaded_state is not None
+        assert reloaded_state.attributes.get("restored") is not True
 
         reloaded_registry_entry = er.async_get(hass).async_get(entity_id)
         assert reloaded_registry_entry is not None
