@@ -77,16 +77,17 @@ class ConditionalVoiceRouter:
             return
 
         compiled: list[_CompiledRule] = []
+        current_checkers: list[ConditionChecker] = []
         try:
             for raw_rule in raw_rules:
                 rule = _validate_rule_shape(raw_rule)
-                checkers: list[ConditionChecker] = []
+                current_checkers = []
                 for condition_config in rule["conditions"]:
                     validated = await async_validate_condition_config(
                         hass, condition_config
                     )
                     checker = await async_condition_from_config(hass, validated)
-                    checkers.append(checker)
+                    current_checkers.append(checker)
                 compiled.append(
                     _CompiledRule(
                         rule_id=rule["id"],
@@ -94,13 +95,21 @@ class ConditionalVoiceRouter:
                         enabled=rule["enabled"],
                         voice=rule["voice"],
                         language=rule.get("language") or None,
-                        checkers=checkers,
+                        checkers=current_checkers,
                     )
                 )
-        except Exception:
+                current_checkers = []
+        except Exception as err:
+            for checker in current_checkers:
+                checker.async_unload()
             for rule in compiled:
                 rule.unload()
-            raise
+            _LOGGER.warning(
+                "Ignoring invalid persisted conditional voice routing rules for %s: %s",
+                self._entry.entry_id,
+                err,
+            )
+            return
 
         self._rules = compiled
 
