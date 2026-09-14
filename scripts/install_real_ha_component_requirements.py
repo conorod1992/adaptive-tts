@@ -8,9 +8,9 @@ version so Real-HA CI uses the exact dependency versions that version declares.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import homeassistant
 
