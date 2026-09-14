@@ -96,12 +96,10 @@ async def test_provider_disappears_and_recovers_without_adaptive_entry_reload(
         assert unavailable_state is not None
         assert unavailable_state.state == STATE_UNAVAILABLE
 
-        failed_stream = ha_tts.async_create_stream(hass, entity_id)
-        failed_stream.async_set_message("During outage")
+        calls_before_outage_request = list(provider.calls)
         with pytest.raises(HomeAssistantError):
-            _ = b"".join(
-                [chunk async for chunk in failed_stream.async_stream_result()]
-            )
+            ha_tts.async_create_stream(hass, entity_id)
+        assert provider.calls == calls_before_outage_request
 
         provider_present = True
         hass.states.async_set(provider_entity_id, "idle")
