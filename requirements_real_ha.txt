@@ -1,0 +1,8 @@
+-r requirements_test.txt
+
+# Runtime requirements pulled in by Adaptive TTS's declared Home Assistant
+# dependencies. pytest-homeassistant-custom-component intentionally does not
+# install every integration requirement that a normal HA installation has.
+hassil==3.11.0
+home-assistant-frontend==20260729.7
+home-assistant-intents==2026.7.30
