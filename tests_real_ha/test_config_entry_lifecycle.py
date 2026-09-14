@@ -9,6 +9,7 @@ import pytest
 from homeassistant.components.tts import TextToSpeechEntity
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.adaptive_tts.const import (
@@ -36,6 +37,8 @@ class LifecycleTTSProvider(TextToSpeechEntity):
 @pytest.mark.asyncio
 async def test_config_entry_load_unload_reload_uses_real_ha_platform(hass) -> None:
     """HA creates, removes, and recreates the Adaptive TTS entity itself."""
+    assert await async_setup_component(hass, "homeassistant", {}) is True
+
     provider_entity_id = "tts.lifecycle_provider"
     provider = LifecycleTTSProvider()
     provider.hass = hass
