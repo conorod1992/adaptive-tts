@@ -6,3 +6,5 @@
 hassil==3.11.0
 home-assistant-frontend==20260729.7
 home-assistant-intents==2026.7.30
+pymicro-vad==1.0.1
+pyspeex-noise==1.0.2
