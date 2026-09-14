@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Adaptive TTS browser test harness</title>
+    <script>
+      class HaSelector extends HTMLElement {
+        set hass(value) { this._hass = value; }
+        set selector(value) { this._selector = value; }
+        set value(value) { this._value = value; }
+        get value() { return this._value; }
+      }
+      customElements.define("ha-selector", HaSelector);
+      customElements.define("ha-card", class extends HTMLElement {});
+    </script>
+    <script type="module" src="/custom_components/adaptive_tts/frontend/adaptive-tts-routing-test.js"></script>
+  </head>
+  <body>
+    <adaptive-tts-root-panel id="panel"></adaptive-tts-root-panel>
+  </body>
+</html>
