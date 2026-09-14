@@ -58,7 +58,13 @@ async def test_first_matching_enabled_rule_wins(hass, tmp_path) -> None:
     hass.states.async_set("input_boolean.first", "on")
     hass.states.async_set("input_boolean.second", "on")
     rules = [
-        _rule("disabled", "Disabled first", "input_boolean.first", "normal", enabled=False),
+        _rule(
+            "disabled",
+            "Disabled first",
+            "input_boolean.first",
+            "normal",
+            enabled=False,
+        ),
         _rule("first", "First enabled", "input_boolean.first", "whisper"),
         _rule("second", "Second enabled", "input_boolean.second", "normal"),
     ]
@@ -66,7 +72,10 @@ async def test_first_matching_enabled_rule_wins(hass, tmp_path) -> None:
     entity = RoutedAdaptiveTTSEntity(_entry(rules))
     attach(entity, hass, source)
 
-    with patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source):
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity",
+        return_value=source,
+    ):
         await entity.async_load_voice_override(hass)
         snapshot = entity._current_policy_snapshot()
         resolved = entity.resolve_request("en-US", {})
@@ -91,9 +100,14 @@ async def test_manual_next_request_override_beats_routing(hass, tmp_path) -> Non
     )
     attach(entity, hass, source)
 
-    with patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source):
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity",
+        return_value=source,
+    ):
         await entity.async_load_voice_override(hass)
-        await entity.async_set_voice_override("en-US", "normal", DURATION_NEXT_REQUEST)
+        await entity.async_set_voice_override(
+            "en-US", "normal", DURATION_NEXT_REQUEST
+        )
         snapshot = entity._current_policy_snapshot()
 
     assert snapshot.override_scope == SCOPE_NEXT_REQUEST
@@ -113,7 +127,10 @@ async def test_routing_state_is_part_of_cache_policy_snapshot(hass, tmp_path) ->
     )
     attach(entity, hass, source)
 
-    with patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source):
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity",
+        return_value=source,
+    ):
         await entity.async_load_voice_override(hass)
         hass.states.async_set("input_boolean.route", "off")
         normal_policy = entity.default_options[CACHE_POLICY_OPTION]
@@ -129,7 +146,9 @@ async def test_routing_state_is_part_of_cache_policy_snapshot(hass, tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_invalid_matching_voice_falls_through_to_next_rule(hass, tmp_path) -> None:
+async def test_invalid_matching_voice_falls_through_to_next_rule(
+    hass, tmp_path
+) -> None:
     """A stale matching voice does not block a later valid matching rule."""
     hass.config.config_dir = str(tmp_path)
     hass.states.async_set("input_boolean.route", "on")
@@ -141,7 +160,10 @@ async def test_invalid_matching_voice_falls_through_to_next_rule(hass, tmp_path)
     entity = RoutedAdaptiveTTSEntity(_entry(rules))
     attach(entity, hass, source)
 
-    with patch("custom_components.adaptive_tts.tts.get_tts_entity", return_value=source):
+    with patch(
+        "custom_components.adaptive_tts.tts.get_tts_entity",
+        return_value=source,
+    ):
         await entity.async_load_voice_override(hass)
         snapshot = entity._current_policy_snapshot()
 
