@@ -33,7 +33,9 @@ from .const import (
 )
 from .helpers import entry_config, is_adaptive_entity
 from .preview import async_register_websocket_commands
-from .routing import async_register_websocket_commands as async_register_routing_commands
+from .routing import (
+    async_register_websocket_commands as async_register_routing_commands,
+)
 from .routing_entity import RoutedAdaptiveTTSEntity
 from .routing_test import (
     async_register_websocket_commands as async_register_routing_test_commands,
