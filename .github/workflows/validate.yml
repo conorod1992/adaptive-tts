@@ -4,6 +4,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "30 0 * * *"
 
 permissions:
   contents: read
@@ -60,33 +62,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Resolve upcoming Home Assistant Python version
+        id: ha-python
+        shell: bash
+        run: |
+          PYTHON_VERSION="$(curl -fsSL https://raw.githubusercontent.com/home-assistant/core/dev/.python-version | tr -d '\n')"
+          test -n "$PYTHON_VERSION"
+          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Home Assistant dev Python version: $PYTHON_VERSION"
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
+          python-version: ${{ steps.ha-python.outputs.version }}
+          allow-prereleases: true
           cache: pip
       - name: Install latest HA test environment
         run: python -m pip install --upgrade -r requirements_real_ha_upcoming.txt
-      - run: python scripts/install_real_ha_component_requirements.py
-      - name: Detect upcoming Home Assistant release
-        id: upcoming
-        shell: bash
+      - name: Install upcoming Home Assistant Core dev
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          from homeassistant.const import __version__
-          from packaging.version import Version
-
-          version = Version(__version__)
-          print(f"ha_version={version}")
-          print(f"run={'true' if version.is_prerelease else 'false'}")
-          PY
+          python -m pip install --upgrade --force-reinstall \
+            "git+https://github.com/home-assistant/core.git@dev"
+      - run: python scripts/install_real_ha_component_requirements.py
       - name: Show upcoming Home Assistant version
-        run: echo "Home Assistant ${{ steps.upcoming.outputs.ha_version }}"
+        run: |
+          python - <<'PY'
+          from importlib.metadata import version
+
+          print("Home Assistant " + version("homeassistant"))
+          print(
+              "pytest-homeassistant-custom-component "
+              + version("pytest-homeassistant-custom-component")
+          )
+          PY
       - name: Run Real HA acceptance tests against upcoming HA
-        if: steps.upcoming.outputs.run == 'true'
         run: python -m pytest tests_real_ha
-      - name: No upcoming HA prerelease available
-        if: steps.upcoming.outputs.run != 'true'
-        run: echo "Latest pytest-homeassistant-custom-component targets stable HA; no newer prerelease is currently available, so the upcoming lane is skipped."
 
   hassfest:
     runs-on: ubuntu-latest
