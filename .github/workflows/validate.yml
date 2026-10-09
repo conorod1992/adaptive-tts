@@ -55,7 +55,7 @@ jobs:
       - run: python scripts/install_real_ha_component_requirements.py
       - name: Show Home Assistant version
         run: python -c "from homeassistant.const import __version__; print(__version__)"
-      - run: python -m pytest tests_real_ha
+      - run: python -m scripts.run_real_ha_tests tests_real_ha
 
   real-ha-upcoming:
     name: real-ha (upcoming)
@@ -94,7 +94,7 @@ jobs:
           )
           PY
       - name: Run Real HA acceptance tests against upcoming HA
-        run: python -m pytest tests_real_ha
+        run: python -m scripts.run_real_ha_tests tests_real_ha
 
   hassfest:
     runs-on: ubuntu-latest
