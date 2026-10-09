@@ -318,13 +318,17 @@ python -m ruff format --check .
 # Real Home Assistant acceptance tests
 python -m pip install -r requirements_real_ha.txt
 python scripts/install_real_ha_component_requirements.py
-python -m pytest tests_real_ha
+python -m scripts.run_real_ha_tests tests_real_ha
 
 # Browser acceptance tests
 npm install
 npx playwright install chromium
 npm run test:browser
 ```
+
+Use the Real HA launcher so Home Assistant initializes its dependency aliases
+before pytest auto-loads HTTP mocking plugins. This matches Home Assistant's own
+test bootstrap and supports both stable and upcoming versions.
 
 CI runs the fast tests plus dedicated Real Home Assistant and Playwright browser
 acceptance lanes. The Real HA suite is also exercised against the current
